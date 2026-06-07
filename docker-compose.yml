@@ -1,0 +1,29 @@
+services:
+  frigate-timelapse:
+    build: .
+    ports:
+      - "8088:8088"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - FRIGATE_URL=${FRIGATE_URL:-http://ccab4aaf-frigate-fa:5000}
+      - EXPORTS_DIR=${EXPORTS_DIR:-/media/frigate/exports}
+      - TZ=${TZ:-America/Los_Angeles}
+    # Local dev: hot-reload code changes without rebuilding the image.
+    # Remove this volume override when deploying to the HA host.
+    volumes:
+      - ./app:/app/app
+      - ./config.json:/app/config.json:ro
+    # HA host deployment: uncomment and adjust these instead of the above:
+    # volumes:
+    #   - /media/frigate/exports:/media/frigate/exports:ro
+    # network_mode: host
+    # (or attach to Frigate's Docker network):
+    # networks:
+    #   - frigate_net
+    #
+    # networks:
+    #   frigate_net:
+    #     external: true
+    #     name: hassio  # verify with: docker network ls | grep ccab4aaf

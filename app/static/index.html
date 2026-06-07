@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frigate Timelapse</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+      min-height: 100vh;
+      padding: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    h1 { font-size: 1.2rem; font-weight: 600; color: #0f172a; margin-bottom: 20px; letter-spacing: 0.01em; }
+
+    .card {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    .row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; }
+
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 0.72rem; color: #64748b; letter-spacing: 0.05em; text-transform: uppercase; }
+
+    select, input[type="date"], input[type="text"] {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      color: #1e293b;
+      padding: 7px 10px;
+      font-size: 0.88rem;
+      outline: none;
+      min-width: 140px;
+    }
+    select:focus, input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+    input[type="text"] { min-width: 240px; }
+
+    /* ---- Timeline ---- */
+    #timeline-wrap {
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-radius: 6px;
+      background: #e2e8f0;
+      position: relative;
+    }
+
+    #timeline {
+      display: flex;
+      position: relative;
+      min-height: 76px;
+      user-select: none;
+      cursor: crosshair;
+    }
+
+    .hour-cell {
+      flex: none;
+      width: 80px;
+      position: relative;
+      border-right: 1px solid #cbd5e1;
+    }
+
+    .hour-cell img {
+      width: 80px;
+      height: 60px;
+      object-fit: cover;
+      display: block;
+      background: #cbd5e1;
+    }
+
+    .hour-cell.no-footage {
+      opacity: 0.45;
+    }
+
+    .hour-cell.no-footage .hour-thumb-bg {
+      width: 80px;
+      height: 60px;
+      background: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hour-label {
+      font-size: 0.62rem;
+      color: #64748b;
+      text-align: center;
+      line-height: 16px;
+      height: 16px;
+      background: #f1f5f9;
+    }
+
+    #selection {
+      position: absolute;
+      top: 0;
+      height: 60px;
+      background: rgba(59, 130, 246, 0.18);
+      border-top: 2px solid #3b82f6;
+      border-bottom: 2px solid #3b82f6;
+      pointer-events: none;
+    }
+
+    /* Handles: 20px wide hit target, 3px visual bar */
+    .handle {
+      position: absolute;
+      top: 0;
+      width: 20px;
+      height: 60px;
+      cursor: ew-resize;
+      pointer-events: auto;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .handle::before {
+      content: '';
+      width: 3px;
+      height: 100%;
+      background: #2563eb;
+      border-radius: 2px;
+      flex: none;
+    }
+    #handle-start { left: 0; transform: translateX(-50%); }
+    #handle-end   { right: 0; transform: translateX(50%); }
+
+    /* ---- Previews ---- */
+    .previews {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .preview { text-align: center; }
+    .preview-title { font-size: 0.68rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .preview-frame {
+      position: relative;
+      border-radius: 5px;
+      overflow: hidden;
+      border: 1px solid #e2e8f0;
+      background: #e2e8f0;
+      aspect-ratio: 16/9;
+    }
+    .preview-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .wm-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: none;
+      flex-direction: column;
+      padding: 18px 20px;
+      gap: 2px;
+    }
+    .wm-overlay .wm-line {
+      color: rgba(255,255,255,0.92);
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.85), -1px -1px 3px rgba(0,0,0,0.5);
+      font-family: ui-monospace, monospace;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .preview-label { font-size: 0.78rem; color: #475569; margin-top: 5px; font-variant-numeric: tabular-nums; }
+
+    /* ---- Speed ---- */
+    .speed-group { display: flex; gap: 6px; }
+    .speed-btn {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      color: #475569;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .speed-btn.active, .speed-btn:hover { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+
+    /* ---- Buttons ---- */
+    .btn {
+      padding: 8px 22px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 500;
+      transition: opacity 0.1s, background 0.1s;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #2563eb; }
+    .btn-success { background: #22c55e; color: #fff; }
+    .btn-success:hover { background: #16a34a; }
+
+    /* ---- Progress ---- */
+    progress {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      appearance: none;
+      background: #e2e8f0;
+      display: block;
+    }
+    progress::-webkit-progress-bar   { background: #e2e8f0; border-radius: 3px; }
+    progress::-webkit-progress-value { background: #3b82f6; border-radius: 3px; }
+    progress::-moz-progress-bar      { background: #3b82f6; border-radius: 3px; }
+
+    #status-msg { font-size: 0.8rem; color: #64748b; margin-top: 8px; }
+    #status-msg.error { color: #dc2626; }
+
+    #no-footage { color: #64748b; font-size: 0.85rem; text-align: center; padding: 24px 0; }
+
+    .hidden { display: none !important; }
+
+    /* Section title within card */
+    .section-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Frigate Timelapse</h1>
+
+  <!-- Camera + Date -->
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label>Camera</label>
+        <select id="camera-select"><option value="">Loading…</option></select>
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="date-input">
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline + previews -->
+  <div class="card">
+    <div class="section-label">Timeline — drag handles to set range</div>
+    <div id="timeline-wrap">
+      <div id="timeline">
+        <!-- .hour-cell elements inserted here -->
+        <div id="selection" style="display:none">
+          <div class="handle" id="handle-start"></div>
+          <div class="handle" id="handle-end"></div>
+        </div>
+      </div>
+    </div>
+    <div id="no-footage" class="hidden">No footage found for this camera and date.</div>
+
+    <div class="previews">
+      <div class="preview">
+        <div class="preview-title">Start</div>
+        <div class="preview-frame">
+          <img id="preview-start" alt="">
+          <div class="wm-overlay" id="wm-overlay-start"></div>
+        </div>
+        <div class="preview-label" id="label-start">—</div>
+      </div>
+      <div class="preview">
+        <div class="preview-title">End</div>
+        <div class="preview-frame">
+          <img id="preview-end" alt="">
+          <div class="wm-overlay" id="wm-overlay-end"></div>
+        </div>
+        <div class="preview-label" id="label-end">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Build controls -->
+  <div class="card">
+    <div class="row" style="margin-bottom:14px">
+      <div class="field">
+        <label>Speed</label>
+        <div class="speed-group">
+          <button class="speed-btn"        data-speed="5">5×</button>
+          <button class="speed-btn active" data-speed="10">10×</button>
+          <button class="speed-btn"        data-speed="25">25×</button>
+          <button class="speed-btn"        data-speed="60">60×</button>
+          <button class="speed-btn"        data-speed="120">120×</button>
+          <button class="speed-btn"        data-speed="300">300×</button>
+          <button class="speed-btn"        data-speed="600">600×</button>
+          <button class="speed-btn"        data-speed="900">900×</button>
+          <button class="speed-btn"        data-speed="1200">1200×</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Watermark -->
+    <div style="border-top:1px solid #e2e8f0;margin:14px 0;padding-top:14px">
+      <div class="row" style="margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.88rem;color:#1e293b;font-weight:500">
+          <input type="checkbox" id="wm-enabled" style="width:16px;height:16px;cursor:pointer;accent-color:#3b82f6">
+          Watermark
+        </label>
+      </div>
+      <div id="wm-options" class="hidden" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
+        <div class="field">
+          <label>Content</label>
+          <select id="wm-content">
+            <option value="time">Time only</option>
+            <option value="camera">Camera only</option>
+            <option value="both" selected>Time &amp; camera</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Position</label>
+          <select id="wm-position">
+            <option value="top-left">Top left</option>
+            <option value="top-right">Top right</option>
+            <option value="bottom-left">Bottom left</option>
+            <option value="bottom-right" selected>Bottom right</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Size</label>
+          <div class="speed-group">
+            <button class="speed-btn wm-size-btn" data-size="small">S</button>
+            <button class="speed-btn wm-size-btn active" data-size="medium">M</button>
+            <button class="speed-btn wm-size-btn" data-size="large">L</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="border-top:1px solid #e2e8f0;padding-top:14px">
+      <div class="field" style="flex:1">
+        <label>Output filename</label>
+        <input type="text" id="filename" placeholder="auto-generated">
+      </div>
+      <button class="btn btn-primary" id="build-btn" disabled>Build Timelapse</button>
+    </div>
+  </div>
+
+  <!-- Progress + download -->
+  <div class="card hidden" id="job-card">
+    <progress id="progress-bar" value="0" max="1"></progress>
+    <div id="status-msg"></div>
+    <div style="margin-top:12px">
+      <a id="download-btn" class="btn btn-success hidden" href="#">Download</a>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // State
+    // -------------------------------------------------------------------------
+    const CELL_W = 80;       // px per hour cell
+    let coverage     = {};   // { "10": [0,1,2,...], ... } from API
+    let timelineHours = [];  // sorted int array
+    let startFrac = 0.1;     // 0–1 position within full 24-h timeline
+    let endFrac   = 0.9;
+    let speed     = 10;
+    let dragging  = null;    // 'start' | 'end' | null
+    let thumbTimer = null;
+    let pollTimer  = null;
+    let laOffsetSec = 0;     // UTC offset of recording timezone (e.g. -25200 for PDT)
+
+    // -------------------------------------------------------------------------
+    // Elements
+    // -------------------------------------------------------------------------
+    const cameraSelect = document.getElementById('camera-select');
+    const dateInput    = document.getElementById('date-input');
+    const tlWrap       = document.getElementById('timeline-wrap');
+    const tl           = document.getElementById('timeline');
+    const selection    = document.getElementById('selection');
+    const hStart       = document.getElementById('handle-start');
+    const hEnd         = document.getElementById('handle-end');
+    const noFootage    = document.getElementById('no-footage');
+    const prevStart    = document.getElementById('preview-start');
+    const prevEnd      = document.getElementById('preview-end');
+    const lblStart     = document.getElementById('label-start');
+    const lblEnd       = document.getElementById('label-end');
+    const filenameInput= document.getElementById('filename');
+    const buildBtn     = document.getElementById('build-btn');
+    const jobCard      = document.getElementById('job-card');
+    const progressBar  = document.getElementById('progress-bar');
+    const statusMsg    = document.getElementById('status-msg');
+    const downloadBtn  = document.getElementById('download-btn');
+
+    // -------------------------------------------------------------------------
+    // Bootstrap
+    // -------------------------------------------------------------------------
+    async function init() {
+      // Fetch timezone offset first (use UTC date as seed — DST edge-case is negligible).
+      // Never use browser local time; always work in America/Los_Angeles.
+      const tzData = await apiFetch(`/timezone?date=${new Date().toISOString().slice(0, 10)}`);
+      laOffsetSec = tzData.offset_seconds;
+
+      // Default to today in America/Los_Angeles, not the browser's timezone.
+      const nowLa = new Date(Date.now() + laOffsetSec * 1000);
+      dateInput.value = [
+        nowLa.getUTCFullYear(),
+        String(nowLa.getUTCMonth() + 1).padStart(2, '0'),
+        String(nowLa.getUTCDate()).padStart(2, '0'),
+      ].join('-');
+
+      const cameras = await apiFetch('/cameras');
+      cameraSelect.innerHTML = cameras.map(c => `<option value="${c}">${c}</option>`).join('');
+      cameraSelect.addEventListener('change', loadTimeline);
+      dateInput.addEventListener('change', loadTimeline);
+      buildBtn.addEventListener('click', startBuild);
+
+      document.querySelectorAll('.speed-btn:not(.wm-size-btn)').forEach(btn => {
+        btn.addEventListener('click', () => {
+          speed = +btn.dataset.speed;
+          document.querySelectorAll('.speed-btn:not(.wm-size-btn)').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+      });
+
+      initWatermarkUI();
+      if (cameras.length) loadTimeline();
+    }
+
+    // -------------------------------------------------------------------------
+    // Timeline loading
+    // -------------------------------------------------------------------------
+    async function loadTimeline() {
+      const camera = cameraSelect.value;
+      const date   = dateInput.value;
+      if (!camera || !date) return;
+
+      // Reset UI
+      tl.querySelectorAll('.hour-cell').forEach(el => el.remove());
+      selection.style.display = 'none';
+      noFootage.classList.add('hidden');
+      buildBtn.disabled = true;
+      prevStart.src = prevEnd.src = '';
+      lblStart.textContent = lblEnd.textContent = '—';
+
+      // Refresh offset for this date (handles DST boundary crossings)
+      const tzData = await apiFetch(`/timezone?date=${enc(date)}`);
+      laOffsetSec = tzData.offset_seconds;
+
+      coverage = await apiFetch(`/coverage?camera=${enc(camera)}&date=${enc(date)}`);
+      timelineHours = Object.keys(coverage).map(Number).sort((a, b) => a - b);
+
+      if (!timelineHours.length) {
+        noFootage.classList.remove('hidden');
+        return;
+      }
+
+      // Always render all 24 hours; grey out those without footage
+      for (let hour = 0; hour < 24; hour++) {
+        const hasFn = timelineHours.includes(hour);
+        const cell  = document.createElement('div');
+        cell.className = 'hour-cell' + (hasFn ? '' : ' no-footage');
+        cell.dataset.hour = hour;
+
+        if (hasFn) {
+          const img   = document.createElement('img');
+          img.src     = `/thumbnail?camera=${enc(camera)}&ts=${localTs(date, hour, 0, 5)}`;
+          img.alt     = `${pad(hour)}:00`;
+          img.loading = 'lazy';
+          cell.append(img);
+        } else {
+          const bg = document.createElement('div');
+          bg.className = 'hour-thumb-bg';
+          cell.append(bg);
+        }
+
+        const lbl = document.createElement('div');
+        lbl.className = 'hour-label';
+        lbl.textContent = `${pad(hour)}:00`;
+        cell.append(lbl);
+        tl.insertBefore(cell, selection);
+      }
+
+      // Default handles: first available minute → one past last available minute
+      const firstH   = timelineHours[0];
+      const lastH    = timelineHours[timelineHours.length - 1];
+      const firstMin = coverage[String(firstH)][0];
+      const lastMin  = coverage[String(lastH)][coverage[String(lastH)].length - 1];
+      startFrac = (firstH * 60 + firstMin)       / (24 * 60);
+      endFrac   = (lastH  * 60 + lastMin  + 1)   / (24 * 60);
+      selection.style.display = 'block';
+      renderSelection();
+      schedulePreviews();
+      autoFilename();
+      buildBtn.disabled = false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Timestamp helpers
+    // -------------------------------------------------------------------------
+
+    // Convert full-day fraction → unix timestamp (seconds).
+    // The timeline always spans 24 hours; fraction 0 = 00:00, 1 = 24:00.
+    function fracToTs(frac) {
+      frac = Math.max(0, Math.min(1, frac));
+      const elapsed = frac * 86400;
+      const h = Math.min(Math.floor(elapsed / 3600), 23);
+      const m = Math.floor((elapsed % 3600) / 60);
+      const s = Math.floor(elapsed % 60);
+      return localTs(dateInput.value, h, m, s);
+    }
+
+    // Build a unix timestamp for date+H/M/S in the RECORDING timezone (not browser local).
+    // Uses the offset fetched from /timezone so the result is correct regardless of
+    // what timezone the browser is set to.
+    function localTs(date, h, m, s) {
+      // Date.UTC treats the components as UTC, giving us a stable baseline.
+      const utcMs = Date.UTC(+date.slice(0,4), +date.slice(5,7)-1, +date.slice(8,10), h, m, s);
+      // Subtract the recording-timezone offset to get the true unix timestamp.
+      // e.g. for PDT (offset=-25200): 10:00 local = 17:00 UTC, so unix = utcMs/1000 - (-25200)
+      return utcMs / 1000 - laOffsetSec;
+    }
+
+    function tsToHMS(ts) {
+      // Display in recording timezone, not browser local.
+      const d = new Date((ts + laOffsetSec) * 1000);
+      const h = d.getUTCHours(), m = d.getUTCMinutes(), s = d.getUTCSeconds();
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    }
+
+    function tlWidth() { return 24 * CELL_W; }
+    function pad(n)    { return String(n).padStart(2, '0'); }
+    function enc(s)    { return encodeURIComponent(s); }
+
+    // -------------------------------------------------------------------------
+    // Selection + handles rendering
+    // -------------------------------------------------------------------------
+    function renderSelection() {
+      const w  = tlWidth();
+      const sx = startFrac * w;
+      const ex = endFrac   * w;
+      selection.style.left  = `${sx}px`;
+      selection.style.width = `${ex - sx}px`;
+    }
+
+    // -------------------------------------------------------------------------
+    // Preview thumbnails (debounced 250 ms)
+    // -------------------------------------------------------------------------
+    function schedulePreviews() {
+      clearTimeout(thumbTimer);
+      thumbTimer = setTimeout(fetchPreviews, 250);
+    }
+
+    function fetchPreviews() {
+      const camera = cameraSelect.value;
+      const ts0    = fracToTs(startFrac);
+      const ts1    = fracToTs(endFrac);
+
+      lblStart.textContent = tsToHMS(ts0);
+      lblEnd.textContent   = tsToHMS(ts1);
+
+      prevStart.src = `/thumbnail?camera=${enc(camera)}&ts=${ts0}`;
+      prevEnd.src   = `/thumbnail?camera=${enc(camera)}&ts=${ts1}`;
+
+      updateWatermarkPreview();
+    }
+
+    // -------------------------------------------------------------------------
+    // Watermark preview overlay (pure CSS/JS, no extra server call)
+    // -------------------------------------------------------------------------
+    const _WM_POS = {
+      'top-left':     { justifyContent: 'flex-start', alignItems: 'flex-start' },
+      'top-right':    { justifyContent: 'flex-start', alignItems: 'flex-end'   },
+      'bottom-left':  { justifyContent: 'flex-end',   alignItems: 'flex-start' },
+      'bottom-right': { justifyContent: 'flex-end',   alignItems: 'flex-end'   },
+    };
+    const _WM_SIZE = { small: 9, medium: 13, large: 19 }; // px, scaled for preview
+
+    function updateWatermarkPreview() {
+      const wm     = getWatermarkConfig();
+      const camera = cameraSelect.value;
+      const times  = [lblStart.textContent, lblEnd.textContent];
+      const ids    = ['wm-overlay-start', 'wm-overlay-end'];
+      const pos    = _WM_POS[wm.position] || _WM_POS['bottom-right'];
+      const fs     = _WM_SIZE[wm.size] || 13;
+
+      ids.forEach((id, i) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        if (!wm.enabled || !camera) {
+          el.style.display = 'none';
+          return;
+        }
+
+        el.style.display        = 'flex';
+        el.style.justifyContent = pos.justifyContent;
+        el.style.alignItems     = pos.alignItems;
+
+        const lines = [];
+        if (wm.content === 'camera' || wm.content === 'both') lines.push(camera);
+        if (wm.content === 'time'   || wm.content === 'both') lines.push(dateInput.value + ' ' + times[i]);
+
+        el.innerHTML = lines
+          .map(t => `<span class="wm-line" style="font-size:${fs}px">${t}</span>`)
+          .join('');
+      });
+    }
+
+    function autoFilename() {
+      const camera = cameraSelect.value;
+      const date   = dateInput.value.replace(/-/g, '');
+      const ts0    = fracToTs(startFrac);
+      // Use LA time via laOffsetSec — never browser local time.
+      const laD    = new Date((ts0 + laOffsetSec) * 1000);
+      const hms    = [laD.getUTCHours(), laD.getUTCMinutes()].map(pad).join('');
+      filenameInput.value = `${camera}_${date}_${hms}`;
+    }
+
+    // -------------------------------------------------------------------------
+    // Drag logic
+    // -------------------------------------------------------------------------
+    function xToFrac(clientX) {
+      const rect = tl.getBoundingClientRect();
+      return Math.max(0, Math.min(1, (clientX - rect.left) / tlWidth()));
+    }
+
+    function applyDrag(f) {
+      const GAP = 1 / Math.max(tlWidth(), 1); // minimum 1px gap
+      if (dragging === 'start') {
+        startFrac = Math.min(f, endFrac - GAP);
+      } else {
+        endFrac = Math.max(f, startFrac + GAP);
+      }
+      renderSelection();
+      schedulePreviews();
+      autoFilename();
+    }
+
+    // Handle mousedown — captured on the handle divs directly
+    hStart.addEventListener('mousedown', e => { dragging = 'start'; e.stopPropagation(); e.preventDefault(); });
+    hEnd.addEventListener('mousedown',   e => { dragging = 'end';   e.stopPropagation(); e.preventDefault(); });
+
+    // Click on timeline body → snap nearest handle to click position
+    tl.addEventListener('mousedown', e => {
+      if (e.target === hStart || e.target === hEnd) return;
+      const f = xToFrac(e.clientX);
+      dragging = Math.abs(f - startFrac) <= Math.abs(f - endFrac) ? 'start' : 'end';
+      applyDrag(f);
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => { if (dragging) applyDrag(xToFrac(e.clientX)); });
+    document.addEventListener('mouseup',   () => { dragging = null; });
+
+    // Touch
+    function touchF(e) { return xToFrac(e.touches[0].clientX); }
+    hStart.addEventListener('touchstart', e => { dragging = 'start'; e.stopPropagation(); e.preventDefault(); }, { passive: false });
+    hEnd.addEventListener('touchstart',   e => { dragging = 'end';   e.stopPropagation(); e.preventDefault(); }, { passive: false });
+    tl.addEventListener('touchstart', e => {
+      if (e.target === hStart || e.target === hEnd) return;
+      const f = touchF(e);
+      dragging = Math.abs(f - startFrac) <= Math.abs(f - endFrac) ? 'start' : 'end';
+      applyDrag(f);
+    });
+    document.addEventListener('touchmove', e => { if (dragging) { applyDrag(touchF(e)); e.preventDefault(); } }, { passive: false });
+    document.addEventListener('touchend',  () => { dragging = null; });
+
+    // -------------------------------------------------------------------------
+    // Build + poll
+    // -------------------------------------------------------------------------
+    async function startBuild() {
+      clearInterval(pollTimer);
+      jobCard.classList.remove('hidden');
+      progressBar.value = 0;
+      downloadBtn.classList.add('hidden');
+      statusMsg.className = '';
+      statusMsg.textContent = 'Starting…';
+      buildBtn.disabled = true;
+
+      let jobId;
+      try {
+        const data = await apiFetch('/timelapse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            camera:    cameraSelect.value,
+            start_ts:  Math.round(fracToTs(startFrac)),
+            end_ts:    Math.round(fracToTs(endFrac)),
+            speed,
+            name:      filenameInput.value.trim(),
+            watermark: getWatermarkConfig(),
+          }),
+        });
+        jobId = data.job_id;
+      } catch (err) {
+        statusMsg.className = 'error';
+        statusMsg.textContent = `Error: ${err.message}`;
+        buildBtn.disabled = false;
+        return;
+      }
+
+      pollTimer = setInterval(() => pollJob(jobId), 1000);
+    }
+
+    async function pollJob(jobId) {
+      let data;
+      try { data = await apiFetch(`/timelapse/${jobId}`); } catch { return; }
+
+      progressBar.value = data.progress ?? 0;
+
+      if (data.status === 'pending' || data.status === 'running') {
+        statusMsg.textContent = `Rendering… ${Math.round((data.progress ?? 0) * 100)}%`;
+      } else if (data.status === 'complete') {
+        clearInterval(pollTimer);
+        progressBar.value = 1;
+        statusMsg.textContent = `Done — ${data.output_file}`;
+        downloadBtn.href = data.download_url;
+        downloadBtn.setAttribute('download', data.output_file);
+        downloadBtn.classList.remove('hidden');
+        buildBtn.disabled = false;
+      } else if (data.status === 'error') {
+        clearInterval(pollTimer);
+        statusMsg.className = 'error';
+        statusMsg.textContent = `Error: ${data.error}`;
+        buildBtn.disabled = false;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Watermark UI + localStorage persistence
+    // -------------------------------------------------------------------------
+    const LS_KEY = 'ftWatermark';
+
+    function loadWatermarkPrefs() {
+      try { return JSON.parse(localStorage.getItem(LS_KEY) || 'null') || {}; }
+      catch { return {}; }
+    }
+
+    function saveWatermarkPrefs() {
+      localStorage.setItem(LS_KEY, JSON.stringify(getWatermarkConfig()));
+    }
+
+    function getWatermarkConfig() {
+      const enabled = document.getElementById('wm-enabled').checked;
+      const content  = document.getElementById('wm-content').value;
+      const position = document.getElementById('wm-position').value;
+      const sizeBtn  = document.querySelector('.wm-size-btn.active');
+      const size     = sizeBtn ? sizeBtn.dataset.size : 'medium';
+      return { enabled, content, position, size };
+    }
+
+    function initWatermarkUI() {
+      const prefs    = loadWatermarkPrefs();
+      const checkbox = document.getElementById('wm-enabled');
+      const options  = document.getElementById('wm-options');
+      const content  = document.getElementById('wm-content');
+      const position = document.getElementById('wm-position');
+
+      // Restore saved values
+      if (prefs.enabled)  checkbox.checked = true;
+      if (prefs.content)  content.value  = prefs.content;
+      if (prefs.position) position.value = prefs.position;
+      if (prefs.size) {
+        document.querySelectorAll('.wm-size-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.size === prefs.size);
+        });
+      }
+
+      // Show/hide sub-options based on checkbox
+      function syncVisibility() {
+        options.classList.toggle('hidden', !checkbox.checked);
+      }
+      syncVisibility();
+      function onWmChange() { saveWatermarkPrefs(); updateWatermarkPreview(); }
+
+      checkbox.addEventListener('change', () => { syncVisibility(); onWmChange(); });
+      content.addEventListener('change',  onWmChange);
+      position.addEventListener('change', onWmChange);
+
+      document.querySelectorAll('.wm-size-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.wm-size-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          onWmChange();
+        });
+      });
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+    async function apiFetch(url, opts) {
+      const res = await fetch(url, opts);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || res.statusText);
+      }
+      return res.json();
+    }
+
+    init();
+  </script>
+</body>
+</html>
