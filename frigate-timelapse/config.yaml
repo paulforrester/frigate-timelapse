@@ -1,0 +1,32 @@
+---
+name: "Frigate Timelapse"
+description: "Generate timelapse videos from Frigate NVR recordings with a visual timeline scrubber."
+version: "1.0.0"
+slug: "frigate_timelapse"
+url: "https://github.com/paulf/frigate-timelapse"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8088
+panel_icon: mdi:video-vintage
+panel_title: Timelapse
+ports:
+  8088/tcp: 8088
+ports_description:
+  8088/tcp: "Web UI (direct access; ingress also available via sidebar)"
+map:
+  - media:rw
+options:
+  timezone: "America/Los_Angeles"
+  port: 8088
+  timelapse_retention_days: 7
+schema:
+  timezone: str
+  port: int
+  timelapse_retention_days: int

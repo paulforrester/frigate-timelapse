@@ -13,8 +13,8 @@ from app.render import Status, WatermarkConfig, create_job, extract_thumbnail, g
 
 TZ = CAMERA_TZ
 
-RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/recordings"))
-OUTPUT_PATH     = Path(os.environ.get("OUTPUT_PATH",     "/output"))
+RECORDINGS_PATH = Path(os.environ.get("RECORDINGS_PATH", "/media/frigate/recordings"))
+OUTPUT_PATH     = Path(os.environ.get("OUTPUT_PATH",     "/media/frigate/timelapses"))
 
 app = FastAPI(title="Frigate Timelapse")
 

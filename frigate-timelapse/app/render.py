@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from app.config import CAMERA_TZ
+from app.config import CAMERA_TZ, TIMELAPSE_RETENTION_SECONDS
 from app.recordings import Segment, find_segments
 
 FFMPEG = "ffmpeg"
@@ -255,7 +255,7 @@ def _render_sync(job: Job, segments: list[Segment]) -> None:
         concat_path.unlink(missing_ok=True)
 
 
-_PURGE_DELAY = 300  # seconds after completion before the output file is deleted
+_PURGE_DELAY = TIMELAPSE_RETENTION_SECONDS
 
 
 async def _purge_after(path: Path) -> None:
