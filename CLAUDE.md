@@ -2,16 +2,13 @@
 
 ## Project goal
 
-Build a self-hosted web application that generates timelapse videos from Frigate NVR
-recordings. The app runs as a Docker container on the HA host, works **directly with
-Frigate's recording files on disk** (no Frigate API auth required), uses ffmpeg to
-concatenate and speed-up MP4 segments, and serves a browser UI with a visual timeline
-scrubber for selecting camera / time range.
+Build a self-hosted Home Assistant add-on that generates timelapse videos from Frigate NVR
+recordings. The app works **directly with Frigate's recording files on disk** (no Frigate
+API auth required), uses ffmpeg to concatenate and speed-up MP4 segments, and serves a
+browser UI with a visual timeline scrubber for selecting camera / time range.
 
 **No credentials are stored anywhere in this app.** All access is via bind-mounted
 filesystem paths — the app reads files Frigate has already written.
-
-Long-term aspiration: package this as a proper Home Assistant add-on.
 
 ---
 
@@ -31,9 +28,7 @@ Long-term aspiration: package this as a proper Home Assistant add-on.
 
 ### Host
 
-- HA OS (supervised), version 2026.5.3
-- Host: `ha.flypig.net`
-- SSH: `ssh -i ~/.ssh/id_ha root@ha.flypig.net`
+- HA OS (supervised)
 - Alpine-based shell — **no python3, no docker CLI, no openssl** on the host shell
 - Use `ha apps` (not `ha addons` — deprecated)
 
@@ -52,7 +47,7 @@ Long-term aspiration: package this as a proper Home Assistant add-on.
 ```
 
 Example: `/media/frigate/recordings/2026-06-07/10/garage/08.30.mp4`
-= garage camera, June 7 2026, recording starting at 10:08:30 local time.
+= garage camera, June 7 2026, recording starting at 10:08:30 UTC.
 
 **Note: date is the top-level key, camera is third-level.** This is the opposite of
 what might be assumed — do not get this wrong or the path parser will be broken.
@@ -67,28 +62,6 @@ latest_date = sorted(os.listdir(RECORDINGS_PATH))[-1]
 first_hour = sorted(os.listdir(f"{RECORDINGS_PATH}/{latest_date}"))[0]
 cameras = sorted(os.listdir(f"{RECORDINGS_PATH}/{latest_date}/{first_hour}"))
 ```
-
-### Frigate details (for reference only — API not used for core feature)
-
-- Internal URL: `http://ccab4aaf-frigate-fa:5000` (auth enabled — avoid using)
-- Version: 0.17.1-416a9b7
-- Add-on slug: `ccab4aaf_frigate-fa`
-
-### Cameras (8 total — directory names under recordings/)
-
-| Directory name | Physical camera |
-|----------------|----------------|
-| `garage` | Axis M1054 (via Scrypted) |
-| `greatroom` | Axis (via Scrypted) |
-| `doorbell` | ONVIF doorbell (via Scrypted) |
-| `frontdoor` | (via Scrypted) |
-| `pooldeck` | VIVOTEK FD8134 (via Scrypted) |
-| `poolspa` | (via Scrypted) |
-| `backyardeastreo` | Reolink Duo 3 POE — east lens |
-| `backyardwestreo` | Reolink Duo 3 POE — west lens |
-
-Always derive the camera list dynamically from the filesystem — the table above is
-for reference only.
 
 ---
 
@@ -110,10 +83,8 @@ No Frigate API calls needed for any of these steps.
 ### Backend — Python / FastAPI
 
 - **FastAPI** with async background tasks for rendering
-- Runs on port **8088** inside the container
-- Two environment variables (set via docker-compose, never hardcoded):
-  - `RECORDINGS_PATH` — bind-mount path to `/media/frigate/recordings/` (default: `/recordings`)
-  - `OUTPUT_PATH` — where finished timelapses are written (default: `/output`)
+- Runs on port **8088** inside the container (configurable via `port` option)
+- Configuration via `/data/options.json` (HA Supervisor) with fallback to `config.json`
 
 Key routes:
 
@@ -152,16 +123,25 @@ Drop audio (`-an`) — timelapse audio is meaningless.
 
 ### Segment file → timestamp mapping
 
-Segment path encodes its start time:
+Segment path encodes its start time in **UTC**:
 ```
 recordings/{YYYY-MM-DD}/{HH}/{camera}/{MM}.{SS}.mp4
 ```
 
-Parse into `datetime(year, month, day, hour=HH, minute=MM, second=SS)` in local time
-(`America/Los_Angeles`). Each segment is approximately 10–60 seconds. Use this to:
+Parse into `datetime(year, month, day, hour=HH, minute=MM, second=SS, tzinfo=timezone.utc)`.
+Each segment is approximately 10–60 seconds. Use this to:
 - Map a unix timestamp → which segment file contains it (find the segment whose
   start time is ≤ target and whose next segment's start time is > target)
 - Calculate the `-ss` offset within that file for thumbnail extraction
+
+### Timezone rules (critical)
+
+- **File paths are always UTC** — Frigate stores recordings using UTC directory names.
+  Never convert paths. Parse with `tzinfo=timezone.utc`.
+- **Display and watermarks always use the configured camera timezone** (from the
+  `timezone` option) via `ZoneInfo`. Never use the system/server timezone.
+- **Never call `datetime.now()` without explicit `tz=`** — always pass an explicit
+  `ZoneInfo` object.
 
 ### Frontend — single HTML file
 
@@ -173,52 +153,41 @@ Parse into `datetime(year, month, day, hour=HH, minute=MM, second=SS)` in local 
   3. Timeline strip: a row of thumbnail images across the selected day, one per
      available hour-block; clicking/dragging sets start and end handles
   4. Start/end preview frames update as handles move
-  5. Speed multiplier selector (5×, 10×, 25×, 60×)
+  5. Speed multiplier selector (5×, 10×, 25×, 60×, 120×, 300×, 600×, 900×, 1200×)
   6. Output filename (auto-generated, editable)
   7. "Build Timelapse" → progress bar polling `/timelapse/{job_id}`
   8. On completion: "Download" button
 
-### Docker
-
-- Base image: `python:3.12-slim` + ffmpeg via apt (`ffmpeg` package)
-- Bind mounts (read-only for recordings, read-write for output):
-  ```yaml
-  volumes:
-    - /media/frigate/recordings:/recordings:ro
-    - /media/frigate/timelapses:/output:rw
-  ```
-- Output directory `/media/frigate/timelapses/` sits alongside Frigate's own
-  `exports/` and is visible in HA's Media Browser automatically
-- No network dependency on Frigate container — no shared Docker network needed
-- No authentication — LAN-only
-
----
-
-## File layout
+### HA add-on structure
 
 ```
-frigate-timelapse/
-├── CLAUDE.md
-├── README.md
-├── Dockerfile
-├── docker-compose.yml
-├── app/
-│   ├── main.py          # FastAPI app + all routes
-│   ├── recordings.py    # filesystem walking, segment→timestamp mapping
-│   ├── render.py        # ffmpeg job queue + timelapse/thumbnail logic
-│   └── static/
-│       └── index.html   # entire UI in one file
-└── deploy.sh            # SSH deploy helper
+frigate-timelapse/          # add-on subfolder
+├── config.yaml             # add-on metadata and options schema
+├── build.yaml              # multi-arch build targets
+├── Dockerfile              # image build instructions
+├── run.sh                  # container entrypoint
+├── config.json             # local dev defaults (mirrors config.yaml options)
+├── requirements.txt
+├── DOCS.md                 # user-facing documentation
+└── app/
+    ├── main.py             # FastAPI app + all routes
+    ├── config.py           # config loading (HA options → config.json → defaults)
+    ├── recordings.py       # filesystem walking, segment→timestamp mapping
+    ├── render.py           # ffmpeg job queue + timelapse/thumbnail logic
+    └── static/
+        └── index.html      # entire UI in one file
+repository.json             # repo root — required for HA custom repository
 ```
 
 ---
 
 ## Output
 
-- Timelapses saved to `/media/frigate/timelapses/{camera}_{date}_{time}.mp4`
+- Timelapses saved to `/media/frigate/timelapses/{name}.mp4`
 - `/media/frigate/` is exposed in HA's Media Browser — the `timelapses/` subdir
   appears there automatically alongside `clips/`, `exports/`, etc.
 - Also directly downloadable from the app UI
+- Files are automatically deleted after `timelapse_retention_days` (default: 7 days)
 
 ---
 
@@ -226,25 +195,15 @@ frigate-timelapse/
 
 ### Local development
 
-The app needs access to the recording files. Use SSHFS to mount them locally, or
-(simpler) use a small sample of real segment files copied from the host for initial
-development, and test the full flow once deployed.
-
-**Recommended local dev approach:**
-
 ```bash
 # Copy a few hours of recordings for local testing (date/hour/camera structure)
-scp -i ~/.ssh/id_ha -r \
-  "root@ha.flypig.net:/media/frigate/recordings/2026-06-07/08" \
+scp -r "root@<ha-host>:/media/frigate/recordings/2026-06-07/08" \
   ./test-data/recordings/2026-06-07/
 
 # Point the app at local test data
 RECORDINGS_PATH=./test-data/recordings OUTPUT_PATH=./test-data/output \
   uvicorn app.main:app --reload --port 8088
 ```
-
-This tests all functionality except rendering a full multi-hour timelapse — but that
-is just a scale difference, not a code difference.
 
 **What works locally with test data:**
 - Camera list
@@ -258,34 +217,10 @@ is just a scale difference, not a code difference.
 - Correct segment discovery across day/hour boundaries
 - Download of large files
 
-### Deploying to the HA host
+### Installing on HA
 
-```bash
-# Copy compose file to host and restart
-scp -i ~/.ssh/id_ha docker-compose.yml root@ha.flypig.net:/root/frigate-timelapse/
-ssh -i ~/.ssh/id_ha root@ha.flypig.net \
-  'cd /root/frigate-timelapse && docker compose up -d --pull always'
-```
-
-App available at `http://ha.flypig.net:8088`.
-
-First deploy: create the output directory on the host first:
-```bash
-ssh -i ~/.ssh/id_ha root@ha.flypig.net 'mkdir -p /media/frigate/timelapses'
-```
-
----
-
-## HA add-on path (future)
-
-- Add-on config in `ha-addon/config.yaml`
-- Needs `media: rw` in `map:` to read recordings and write timelapses
-- Does NOT need to join Frigate's Docker network (no API dependency)
-- `RECORDINGS_PATH=/media/frigate/recordings`, `OUTPUT_PATH=/media/frigate/timelapses`
-
-References:
-- https://github.com/hassio-addons/addon-example
-- https://developers.home-assistant.io/docs/add-ons/configuration
+Push the repo to GitHub (must be public), then add the repo URL as a custom repository
+in the HA add-on store. HA builds the image locally — no registry push needed.
 
 ---
 
@@ -296,8 +231,7 @@ References:
   of the next segment in the same directory, or probe with ffprobe if needed
 - **Segment filename format is `{MM}.{SS}.mp4`** (minute dot second, both zero-padded)
   — parse carefully, e.g. `08.30.mp4` = minute 08, second 30, NOT 8.3 seconds
-- **Timezone** — the path encodes local time (`America/Los_Angeles`); be consistent
-  about tz-aware vs naive datetimes throughout
+- **Timezone** — paths encode UTC; display uses the configured camera timezone
 - **Large time ranges** — a 24-hour timelapse at 10× is still 8.6 minutes of video
   and ~1440 segments to concatenate; warn users above ~6 hours, cap at 24 hours
 - **ffmpeg concat with many files** — write a concat list file rather than passing
@@ -305,5 +239,6 @@ References:
 - **Output directory must exist** before ffmpeg writes to it — create on startup
 - **Job cleanup** — keep finished job metadata in memory (dict); optionally delete
   temp concat list files after render completes
-- **HA OS host shell has no python3** — all deploy scripting runs locally and is
-  pushed via SSH
+- **HA OS host shell has no python3** — all deploy scripting runs locally
+- **All HA add-ons share the `hassio` Docker network** — Frigate reachable at
+  `http://<frigate-slug>:5000` without extra network config in config.yaml
