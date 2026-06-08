@@ -1,27 +1,46 @@
 """
 ffmpeg-based thumbnail extraction and timelapse rendering.
 
-Jobs run in a thread pool (asyncio.to_thread) so they don't block the event loop.
-Progress is tracked by parsing ffmpeg's -progress output against total input duration.
+Parallel rendering splits the segment list across CPU_COUNT worker ffmpeg processes,
+then joins their outputs via a stream-copy concatenation pass (no re-encode).
+Each chunk starts encoding immediately — the pipelining is across cores, not time.
+
+Progress is tracked per-chunk via ffmpeg's -progress output; job.progress is the
+duration-weighted average across all running chunks.
 """
 
 import asyncio
+import logging
+import os
 import re
 import subprocess
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
 from app.config import CAMERA_TZ, OUTPUT_CRF, OUTPUT_MAX_HEIGHT, TIMELAPSE_RETENTION_SECONDS
 from app.recordings import Segment, find_segments
 
 FFMPEG = "ffmpeg"
+log = logging.getLogger(__name__)
+
+CPU_COUNT = os.cpu_count() or 1
+_MIN_SEGS_PER_CHUNK = 4      # minimum segments per chunk; below this, single-process is faster
 
 _FONT_SIZES = {"small": 18, "medium": 28, "large": 42}
 _MARGIN = 40
+
+# UI label → ffmpeg preset string
+_PRESET_MAP = {
+    "quality":  "medium",     # slower encode, better compression, smaller file
+    "balanced": "fast",       # default: good tradeoff
+    "speed":    "ultrafast",  # fastest encode, largest file
+}
 
 
 class Status(str, Enum):
@@ -41,16 +60,17 @@ class WatermarkConfig:
 
 @dataclass
 class Job:
-    id: str
-    camera: str
-    start: datetime
-    end: datetime
-    speed: float
-    output_path: Path
-    watermark: WatermarkConfig = None   # type: ignore[assignment]
-    status: Status = Status.PENDING
-    progress: float = 0.0
-    error: str = ""
+    id:            str
+    camera:        str
+    start:         datetime
+    end:           datetime
+    speed:         float
+    output_path:   Path
+    watermark:     WatermarkConfig = None   # type: ignore[assignment]
+    encode_preset: str             = "fast"
+    status:        Status          = Status.PENDING
+    progress:      float           = 0.0
+    error:         str             = ""
 
     def __post_init__(self) -> None:
         if self.watermark is None:
@@ -179,76 +199,214 @@ def _watermark_filters(wm: WatermarkConfig, camera: str, start_ts: int) -> list[
 
 
 # ---------------------------------------------------------------------------
-# Timelapse rendering
+# Shared ffmpeg helpers
 # ---------------------------------------------------------------------------
 
 def _total_duration(segments: list[Segment]) -> float:
     return sum((s.end - s.start).total_seconds() for s in segments)
 
 
-def _render_sync(job: Job, segments: list[Segment]) -> None:
-    """
-    Concatenate *segments*, optionally burn in a watermark, then speed up.
-    Writes to job.output_path. Updates job.progress while running.
-    """
-    job.status = Status.RUNNING
-    total_duration = _total_duration(segments)
+def _build_vf(job: Job, chunk_start_ts: int) -> str:
+    """Build the complete -vf filter chain for one chunk."""
+    parts: list[str] = []
+    if job.watermark and job.watermark.enabled:
+        parts.extend(_watermark_filters(job.watermark, job.camera, chunk_start_ts))
+    if OUTPUT_MAX_HEIGHT > 0:
+        parts.append(
+            f"scale=-2:if(gt(ih\\,{OUTPUT_MAX_HEIGHT})\\,{OUTPUT_MAX_HEIGHT}\\,ih)"
+        )
+    parts.append(f"setpts={1.0 / job.speed:.6f}*PTS")
+    return ",".join(parts)
+
+
+def _run_encode(
+    cmd: list[str],
+    chunk_duration: float,
+    speed: float,
+    chunk_progress: list[float],
+    chunk_idx: int,
+    on_progress: Callable[[], None],
+) -> None:
+    """Run ffmpeg, parsing out_time_us to update chunk_progress[chunk_idx]."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+    )
+    for line in proc.stderr:  # type: ignore[union-attr]
+        m = re.match(r"out_time_us=(\d+)", line.strip())
+        if m and chunk_duration > 0:
+            # out_time_us is output PTS — multiply by speed to recover input time.
+            elapsed_s = int(m.group(1)) / 1_000_000 * speed
+            chunk_progress[chunk_idx] = min(elapsed_s / chunk_duration, 0.99)
+            on_progress()
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
+
+
+# ---------------------------------------------------------------------------
+# Per-chunk encoding
+# ---------------------------------------------------------------------------
+
+def _encode_chunk(
+    segments: list[Segment],
+    output_path: Path,
+    job: Job,
+    thread_count: int,
+    chunk_duration: float,
+    chunk_progress: list[float],
+    chunk_idx: int,
+    on_progress: Callable[[], None],
+) -> None:
+    """Render one list of segments to output_path."""
+    chunk_start_ts = int(segments[0].start.timestamp())
+    vf = _build_vf(job, chunk_start_ts)
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", prefix="frigate_concat_", delete=False
+        mode="w", suffix=".txt", prefix="frigate_chunk_", delete=False
     ) as f:
         concat_path = Path(f.name)
         for seg in segments:
             f.write(f"file '{seg.path.absolute()}'\n")
 
     try:
-        # Build the -vf filter chain.
-        # Watermark drawtext runs first (sees original PTS = recording offset),
-        # then setpts compresses the timeline for the speed-up.
-        vf_parts: list[str] = []
-        if job.watermark and job.watermark.enabled:
-            vf_parts.extend(
-                _watermark_filters(job.watermark, job.camera, int(job.start.timestamp()))
-            )
-        if OUTPUT_MAX_HEIGHT > 0:
-            # Scale down if source is taller than max height; never upscale.
-            # \, escapes the comma so ffmpeg doesn't treat it as a filter separator.
-            vf_parts.append(
-                f"scale=-2:if(gt(ih\\,{OUTPUT_MAX_HEIGHT})\\,{OUTPUT_MAX_HEIGHT}\\,ih)"
-            )
-        vf_parts.append(f"setpts={1.0 / job.speed:.6f}*PTS")
-        vf = ",".join(vf_parts)
-
         cmd = [
             FFMPEG, "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", str(concat_path),
+            "-f", "concat", "-safe", "0", "-i", str(concat_path),
             "-vf", vf,
             "-an",
-            "-c:v", "libx264", "-preset", "fast", "-crf", str(OUTPUT_CRF),
+            "-c:v", "libx264",
+            "-preset", job.encode_preset,
+            "-crf", str(OUTPUT_CRF),
+            "-threads", str(thread_count),
             "-pix_fmt", "yuv420p",
             "-progress", "pipe:2",
-            str(job.output_path),
+            str(output_path),
         ]
+        _run_encode(cmd, chunk_duration, job.speed, chunk_progress, chunk_idx, on_progress)
+    finally:
+        concat_path.unlink(missing_ok=True)
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
 
-        for line in proc.stderr:  # type: ignore[union-attr]
-            line = line.strip()
-            m = re.match(r"out_time_us=(\d+)", line)
-            if m and total_duration > 0:
-                # out_time_us is output PTS — multiply by speed to recover input time.
-                elapsed_s = int(m.group(1)) / 1_000_000 * job.speed
-                job.progress = min(elapsed_s / total_duration, 0.99)
+def _concat_chunks(chunk_paths: list[Path], output_path: Path) -> None:
+    """Stream-copy pre-encoded chunks into one final MP4 (no re-encode)."""
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", prefix="frigate_join_", delete=False
+    ) as f:
+        concat_path = Path(f.name)
+        for p in chunk_paths:
+            f.write(f"file '{p.absolute()}'\n")
+    try:
+        cmd = [
+            FFMPEG, "-y",
+            "-f", "concat", "-safe", "0", "-i", str(concat_path),
+            "-c:v", "copy",
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(f"chunk join failed: {result.stderr[-500:]}")
+    finally:
+        concat_path.unlink(missing_ok=True)
 
-        proc.wait()
-        if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
+
+# ---------------------------------------------------------------------------
+# Timelapse rendering (orchestrator)
+# ---------------------------------------------------------------------------
+
+def _split_chunks(segments: list[Segment], n: int) -> list[list[Segment]]:
+    """Split segments into at most n roughly equal-sized chunks."""
+    if n <= 1:
+        return [segments]
+    chunk_size = max(_MIN_SEGS_PER_CHUNK, len(segments) // n)
+    chunks = [segments[i:i + chunk_size] for i in range(0, len(segments), chunk_size)]
+    # Merge a tiny tail chunk into the previous one to avoid wasted ffmpeg startup.
+    if len(chunks) > 1 and len(chunks[-1]) < _MIN_SEGS_PER_CHUNK:
+        chunks[-2].extend(chunks.pop())
+    return chunks
+
+
+def _render_sync(job: Job, segments: list[Segment]) -> None:
+    """
+    Concatenate segments, optionally burn watermark, then speed up.
+    Writes to job.output_path. Updates job.progress while running.
+    Uses parallel chunks when segment count justifies it.
+    """
+    job.status = Status.RUNNING
+    total_duration = _total_duration(segments)
+    n_chunks = min(CPU_COUNT, max(1, len(segments) // _MIN_SEGS_PER_CHUNK))
+
+    try:
+        if n_chunks <= 1:
+            log.info(
+                "Render %s: %d segs, %.0fs input → single ffmpeg, %d threads",
+                job.id[:8], len(segments), total_duration, CPU_COUNT,
+            )
+            chunk_progress = [0.0]
+
+            def _update_single() -> None:
+                job.progress = chunk_progress[0]
+
+            _encode_chunk(
+                segments, job.output_path, job,
+                thread_count=CPU_COUNT,
+                chunk_duration=total_duration,
+                chunk_progress=chunk_progress,
+                chunk_idx=0,
+                on_progress=_update_single,
+            )
+
+        else:
+            chunks = _split_chunks(segments, n_chunks)
+            actual_n = len(chunks)
+            threads_per_chunk = max(1, CPU_COUNT // actual_n)
+            chunk_durations = [_total_duration(c) for c in chunks]
+            chunk_progress = [0.0] * actual_n
+            chunk_paths = [
+                job.output_path.parent / f"_chunk_{job.id}_{i}.mp4"
+                for i in range(actual_n)
+            ]
+
+            log.info(
+                "Render %s: %d segs, %.0fs input → %d parallel chunks, %d threads each",
+                job.id[:8], len(segments), total_duration, actual_n, threads_per_chunk,
+            )
+
+            def _update_parallel() -> None:
+                if total_duration > 0:
+                    job.progress = min(
+                        sum(
+                            chunk_progress[i] * chunk_durations[i]
+                            for i in range(actual_n)
+                        ) / total_duration,
+                        0.99,
+                    )
+
+            try:
+                with ThreadPoolExecutor(max_workers=actual_n) as pool:
+                    futures = {
+                        pool.submit(
+                            _encode_chunk,
+                            chunk, chunk_paths[i], job, threads_per_chunk,
+                            chunk_durations[i], chunk_progress, i, _update_parallel,
+                        ): i
+                        for i, chunk in enumerate(chunks)
+                    }
+                    errors: list[Exception] = []
+                    for fut in as_completed(futures):
+                        try:
+                            fut.result()
+                        except Exception as exc:
+                            errors.append(exc)
+
+                if errors:
+                    raise errors[0]
+
+                log.info("Render %s: all chunks done, joining", job.id[:8])
+                _concat_chunks(chunk_paths, job.output_path)
+
+            finally:
+                for p in chunk_paths:
+                    p.unlink(missing_ok=True)
 
         job.progress = 1.0
         job.status = Status.COMPLETE
@@ -257,9 +415,6 @@ def _render_sync(job: Job, segments: list[Segment]) -> None:
         job.status = Status.ERROR
         job.error = str(exc)
         raise
-
-    finally:
-        concat_path.unlink(missing_ok=True)
 
 
 _PURGE_DELAY = TIMELAPSE_RETENTION_SECONDS
@@ -288,6 +443,7 @@ def create_job(
     recordings_root: str | Path,
     name: str = "",
     watermark: WatermarkConfig | None = None,
+    encode_preset: str = "balanced",
 ) -> Job:
     """
     Create a timelapse render job and schedule it as a background task.
@@ -305,6 +461,7 @@ def create_job(
         speed=speed,
         output_path=output_path,
         watermark=watermark or WatermarkConfig(),
+        encode_preset=_PRESET_MAP.get(encode_preset, "fast"),
     )
     _jobs[job_id] = job
 

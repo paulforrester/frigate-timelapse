@@ -330,6 +330,14 @@
           <button class="speed-btn"        data-speed="1200">1200×</button>
         </div>
       </div>
+      <div class="field">
+        <label>Encode</label>
+        <div class="speed-group">
+          <button class="speed-btn encode-btn" data-preset="quality" title="Slower encode, smaller file">Quality</button>
+          <button class="speed-btn encode-btn active" data-preset="balanced" title="Default — good speed/size tradeoff">Balanced</button>
+          <button class="speed-btn encode-btn" data-preset="speed" title="Fastest encode, largest file">Speed</button>
+        </div>
+      </div>
     </div>
 
     <!-- Watermark -->
@@ -396,7 +404,8 @@
     let timelineHours = [];  // sorted int array
     let startFrac = 0.1;     // 0–1 position within full 24-h timeline
     let endFrac   = 0.9;
-    let speed     = 10;
+    let speed        = 10;
+    let encodePreset = 'balanced';
     let dragging  = null;    // 'start' | 'end' | null
     let thumbTimer = null;
     let pollTimer  = null;
@@ -476,10 +485,18 @@
       dateInput.addEventListener('change', loadTimeline);
       buildBtn.addEventListener('click', startBuild);
 
-      document.querySelectorAll('.speed-btn:not(.wm-size-btn)').forEach(btn => {
+      document.querySelectorAll('.speed-btn:not(.wm-size-btn):not(.encode-btn)').forEach(btn => {
         btn.addEventListener('click', () => {
           speed = +btn.dataset.speed;
-          document.querySelectorAll('.speed-btn:not(.wm-size-btn)').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.speed-btn:not(.wm-size-btn):not(.encode-btn)').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+      });
+
+      document.querySelectorAll('.encode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          encodePreset = btn.dataset.preset;
+          document.querySelectorAll('.encode-btn').forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
         });
       });
@@ -745,12 +762,13 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            camera:    cameraSelect.value,
-            start_ts:  Math.round(fracToTs(startFrac)),
-            end_ts:    Math.round(fracToTs(endFrac)),
+            camera:        cameraSelect.value,
+            start_ts:      Math.round(fracToTs(startFrac)),
+            end_ts:        Math.round(fracToTs(endFrac)),
             speed,
-            name:      filenameInput.value.trim(),
-            watermark: getWatermarkConfig(),
+            name:          filenameInput.value.trim(),
+            watermark:     getWatermarkConfig(),
+            encode_preset: encodePreset,
           }),
         });
         jobId = data.job_id;

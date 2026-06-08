@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,7 +12,9 @@ from pydantic import BaseModel
 from app import index
 from app.config import CAMERA_TZ
 from app.recordings import find_segments, segment_at
-from app.render import Status, WatermarkConfig, create_job, extract_thumbnail, get_job
+from app.render import CPU_COUNT, Status, WatermarkConfig, create_job, extract_thumbnail, get_job
+
+log = logging.getLogger(__name__)
 
 TZ = CAMERA_TZ
 
@@ -23,6 +26,7 @@ app = FastAPI(title="Frigate Timelapse")
 
 @app.on_event("startup")
 async def _startup() -> None:
+    log.info("CPU cores available: %d", CPU_COUNT)
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
     last_scan_time = index.init()
     asyncio.create_task(index.build(RECORDINGS_PATH, last_scan_time))
@@ -99,12 +103,13 @@ class WatermarkOptions(BaseModel):
 
 
 class TimelapseRequest(BaseModel):
-    camera:    str
-    start_ts:  int                           # unix seconds
-    end_ts:    int                           # unix seconds
-    speed:     float          = 10.0         # playback multiplier
-    name:      str            = ""
-    watermark: WatermarkOptions = WatermarkOptions()
+    camera:        str
+    start_ts:      int                           # unix seconds
+    end_ts:        int                           # unix seconds
+    speed:         float          = 10.0         # playback multiplier
+    name:          str            = ""
+    watermark:     WatermarkOptions = WatermarkOptions()
+    encode_preset: str            = "balanced"   # "quality" | "balanced" | "speed"
 
 
 @app.post("/timelapse", status_code=202)
@@ -133,6 +138,7 @@ async def start_timelapse(req: TimelapseRequest) -> dict:
             position=req.watermark.position,
             size=req.watermark.size,
         ),
+        encode_preset=req.encode_preset,
     )
     return {"job_id": job.id}
 
