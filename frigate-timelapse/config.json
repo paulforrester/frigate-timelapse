@@ -1,4 +1,5 @@
 {
   "timezone": "America/Los_Angeles",
-  "timelapse_retention_days": 7
+  "timelapse_retention_days": 7,
+  "verbose_logging": false
 }

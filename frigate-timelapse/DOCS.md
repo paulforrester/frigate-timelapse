@@ -17,6 +17,7 @@ alongside Frigate's own clips and exports.
 | `timezone` | `America/Los_Angeles` | IANA timezone of the camera location, used for watermarks and display |
 | `port` | `8088` | Host port for direct browser access (ingress is also available) |
 | `timelapse_retention_days` | `7` | Days to keep finished timelapse files before automatic deletion |
+| `verbose_logging` | `false` | Log index build/scan progress at 30-second intervals including camera, date, and hour |
 
 ## Access
 

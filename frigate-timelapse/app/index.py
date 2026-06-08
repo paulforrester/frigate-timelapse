@@ -20,12 +20,15 @@ from datetime import datetime, timedelta, timezone as _utc
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from app.config import VERBOSE_LOGGING
+
 log = logging.getLogger(__name__)
 
 # {camera: {utc_date_str: {utc_hour: set[minute]}}}
 _index: dict[str, dict[str, dict[int, set[int]]]] = {}
 _indexed: bool = False
 _progress: float = 0.0
+_last_verbose_log: float = 0.0  # monotonic timestamp of the last verbose scan log
 
 # HA add-ons always have /data/ as writable persistent storage.
 # Override with INDEX_FILE env var for local dev.
@@ -158,23 +161,38 @@ def _save_sync(last_scan_time: float) -> None:
 # Scanning (thread-safe: results collected in local dict, merged in event loop)
 # ---------------------------------------------------------------------------
 
-def _scan_date_sync(date_dir: Path) -> dict[str, dict[int, set[int]]]:
+_VERBOSE_INTERVAL = 30.0  # seconds between verbose scan log lines
+
+
+def _scan_date_sync(date_dir: Path, verbose: bool = False) -> dict[str, dict[int, set[int]]]:
     """
     Walk one date directory and return {camera: {hour: {minutes}}}.
-    Runs entirely in a thread pool worker — never touches module globals.
+    Runs entirely in a thread pool worker — never touches module globals except
+    _last_verbose_log (written only when verbose=True; acceptable race, see below).
+    When verbose=True, logs camera/date/hour at most every _VERBOSE_INTERVAL seconds.
     """
+    global _last_verbose_log
     result: dict[str, dict[int, set[int]]] = {}
-    for hour_dir in date_dir.iterdir():
+    date_str = date_dir.name
+    for hour_dir in sorted(date_dir.iterdir()):
         if not hour_dir.is_dir():
             continue
         try:
             hour = int(hour_dir.name)
         except ValueError:
             continue
-        for camera_dir in hour_dir.iterdir():
+        for camera_dir in sorted(hour_dir.iterdir()):
             if not camera_dir.is_dir():
                 continue
             camera = camera_dir.name
+            if verbose:
+                now = time.monotonic()
+                if now - _last_verbose_log >= _VERBOSE_INTERVAL:
+                    _last_verbose_log = now
+                    log.info(
+                        "Index scan [%.0f%%]: date=%s hour=%02d:00 camera=%s",
+                        _progress, date_str, hour, camera,
+                    )
             for seg in camera_dir.glob("*.mp4"):
                 try:
                     minute = int(seg.stem.split(".")[0])
@@ -226,6 +244,12 @@ async def build(recordings_root: Path, last_scan_time: float) -> None:
 
     indexed_dates: set[str] = {date for cam_dates in _index.values() for date in cam_dates}
 
+    if VERBOSE_LOGGING:
+        log.info(
+            "Index build started: %d date dirs to check (last_scan_time=%.0f)",
+            len(date_dirs), last_scan_time,
+        )
+
     for i, date_dir in enumerate(date_dirs):
         date_str = date_dir.name
         try:
@@ -244,7 +268,7 @@ async def build(recordings_root: Path, last_scan_time: float) -> None:
 
         if needs_scan:
             try:
-                partial = await asyncio.to_thread(_scan_date_sync, date_dir)
+                partial = await asyncio.to_thread(_scan_date_sync, date_dir, VERBOSE_LOGGING)
                 _merge_date(date_str, partial)
             except Exception as exc:
                 log.warning("Skipping %s: %s", date_dir.name, exc)
@@ -255,7 +279,8 @@ async def build(recordings_root: Path, last_scan_time: float) -> None:
     _indexed = True
     _progress = 100.0
     await asyncio.to_thread(_save_sync, time.time())
-    log.info("Index build complete: %d cameras", len(_index))
+    log.info("Index build complete: %d cameras, %d total dates",
+             len(_index), sum(len(d) for d in _index.values()))
 
 
 async def watch(recordings_root: Path) -> None:

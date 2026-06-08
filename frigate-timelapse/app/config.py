@@ -18,6 +18,7 @@ _DEFAULTS: dict = {
     "timezone": "America/Los_Angeles",
     "port": 8088,
     "timelapse_retention_days": 7,
+    "verbose_logging": False,
 }
 
 
@@ -45,3 +46,6 @@ CAMERA_TZ: ZoneInfo = ZoneInfo(_cfg["timezone"])
 
 # Seconds after a render completes before the output file is deleted.
 TIMELAPSE_RETENTION_SECONDS: int = int(_cfg["timelapse_retention_days"]) * 86400
+
+# When True, index build logs progress at 30-second intervals with camera/date/hour detail.
+VERBOSE_LOGGING: bool = bool(_cfg.get("verbose_logging", False))
