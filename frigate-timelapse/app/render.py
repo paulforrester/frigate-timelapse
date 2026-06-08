@@ -236,7 +236,8 @@ def _render_sync(job: Job, segments: list[Segment]) -> None:
             line = line.strip()
             m = re.match(r"out_time_us=(\d+)", line)
             if m and total_duration > 0:
-                elapsed_s = int(m.group(1)) / 1_000_000
+                # out_time_us is output PTS — multiply by speed to recover input time.
+                elapsed_s = int(m.group(1)) / 1_000_000 * job.speed
                 job.progress = min(elapsed_s / total_duration, 0.99)
 
         proc.wait()
