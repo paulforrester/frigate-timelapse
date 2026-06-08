@@ -525,7 +525,7 @@
 
         if (hasFn) {
           const img   = document.createElement('img');
-          img.src     = `/thumbnail?camera=${enc(camera)}&ts=${localTs(date, hour, 0, 5)}`;
+          img.src     = `${API_BASE}/thumbnail?camera=${enc(camera)}&ts=${localTs(date, hour, 0, 5)}`;
           img.alt     = `${pad(hour)}:00`;
           img.loading = 'lazy';
           cell.append(img);
@@ -620,8 +620,8 @@
       lblStart.textContent = tsToHMS(ts0);
       lblEnd.textContent   = tsToHMS(ts1);
 
-      prevStart.src = `/thumbnail?camera=${enc(camera)}&ts=${ts0}`;
-      prevEnd.src   = `/thumbnail?camera=${enc(camera)}&ts=${ts1}`;
+      prevStart.src = `${API_BASE}/thumbnail?camera=${enc(camera)}&ts=${ts0}`;
+      prevEnd.src   = `${API_BASE}/thumbnail?camera=${enc(camera)}&ts=${ts1}`;
 
       updateWatermarkPreview();
     }
@@ -776,7 +776,7 @@
         clearInterval(pollTimer);
         progressBar.value = 1;
         statusMsg.textContent = `Done — ${data.output_file}`;
-        downloadBtn.href = data.download_url;
+        downloadBtn.href = API_BASE + data.download_url;
         downloadBtn.setAttribute('download', data.output_file);
         downloadBtn.classList.remove('hidden');
         buildBtn.disabled = false;
