@@ -221,7 +221,7 @@ async def build(recordings_root: Path, last_scan_time: float) -> None:
     hour-subdir mtimes) predate last_scan_time. Scans everything else.
     Sets _indexed=True and persists when done.
     """
-    global _indexed, _progress
+    global _indexed, _progress, _last_verbose_log
 
     if not recordings_root.exists():
         log.warning("Recordings path %s not found; index will be empty", recordings_root)
