@@ -267,11 +267,19 @@ async def build(recordings_root: Path, last_scan_time: float) -> None:
             needs_scan = True
 
         if needs_scan:
+            if VERBOSE_LOGGING:
+                log.info("Index rescan [%.0f%%]: %s", _progress, date_str)
             try:
                 partial = await asyncio.to_thread(_scan_date_sync, date_dir, VERBOSE_LOGGING)
                 _merge_date(date_str, partial)
             except Exception as exc:
                 log.warning("Skipping %s: %s", date_dir.name, exc)
+        elif VERBOSE_LOGGING:
+            # Throttled heartbeat so the user sees progress even when most dates are cached.
+            now = time.monotonic()
+            if now - _last_verbose_log >= _VERBOSE_INTERVAL:
+                _last_verbose_log = now
+                log.info("Index check [%.0f%%]: %s (cached, skipping)", _progress, date_str)
 
         _progress = (i + 1) / len(date_dirs) * 100.0
         await asyncio.sleep(0)  # yield to event loop between dates

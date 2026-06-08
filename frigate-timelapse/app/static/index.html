@@ -851,8 +851,15 @@
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    // When served through HA ingress the page URL is something like
+    // /api/hassio_ingress/TOKEN/ — strip the trailing component so that
+    // fetch('/cameras') becomes fetch('/api/hassio_ingress/TOKEN/cameras').
+    // When accessed directly (http://ha:8088/) pathname is '/' and API_BASE is ''.
+    const API_BASE = window.location.pathname.replace(/\/[^/]*$/, '');
+
     async function apiFetch(url, opts) {
-      const res = await fetch(url, opts);
+      const res = await fetch(API_BASE + url, opts);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(err.detail || res.statusText);
