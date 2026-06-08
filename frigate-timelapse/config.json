@@ -1,5 +1,7 @@
 {
   "timezone": "America/Los_Angeles",
   "timelapse_retention_days": 7,
-  "verbose_logging": false
+  "verbose_logging": false,
+  "output_crf": 28,
+  "output_max_height": 1080
 }

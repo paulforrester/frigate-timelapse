@@ -18,6 +18,8 @@ alongside Frigate's own clips and exports.
 | `port` | `8088` | Host port for direct browser access (ingress is also available) |
 | `timelapse_retention_days` | `7` | Days to keep finished timelapse files before automatic deletion |
 | `verbose_logging` | `false` | Log index build/scan progress at 30-second intervals including camera, date, and hour |
+| `output_crf` | `28` | libx264 quality level (18 = near-lossless, 28 = good quality, 35 = small file). Lower = larger file |
+| `output_max_height` | `1080` | Scale down output if source is taller than this many pixels. Set to `0` to disable scaling |
 
 ## Access
 

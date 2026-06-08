@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from app.config import CAMERA_TZ, TIMELAPSE_RETENTION_SECONDS
+from app.config import CAMERA_TZ, OUTPUT_CRF, OUTPUT_MAX_HEIGHT, TIMELAPSE_RETENTION_SECONDS
 from app.recordings import Segment, find_segments
 
 FFMPEG = "ffmpeg"
@@ -210,6 +210,12 @@ def _render_sync(job: Job, segments: list[Segment]) -> None:
             vf_parts.extend(
                 _watermark_filters(job.watermark, job.camera, int(job.start.timestamp()))
             )
+        if OUTPUT_MAX_HEIGHT > 0:
+            # Scale down if source is taller than max height; never upscale.
+            # \, escapes the comma so ffmpeg doesn't treat it as a filter separator.
+            vf_parts.append(
+                f"scale=-2:if(gt(ih\\,{OUTPUT_MAX_HEIGHT})\\,{OUTPUT_MAX_HEIGHT}\\,ih)"
+            )
         vf_parts.append(f"setpts={1.0 / job.speed:.6f}*PTS")
         vf = ",".join(vf_parts)
 
@@ -219,7 +225,7 @@ def _render_sync(job: Job, segments: list[Segment]) -> None:
             "-i", str(concat_path),
             "-vf", vf,
             "-an",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "fast", "-crf", str(OUTPUT_CRF),
             "-pix_fmt", "yuv420p",
             "-progress", "pipe:2",
             str(job.output_path),

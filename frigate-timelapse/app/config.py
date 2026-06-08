@@ -19,6 +19,8 @@ _DEFAULTS: dict = {
     "port": 8088,
     "timelapse_retention_days": 7,
     "verbose_logging": False,
+    "output_crf": 28,
+    "output_max_height": 1080,
 }
 
 
@@ -49,3 +51,9 @@ TIMELAPSE_RETENTION_SECONDS: int = int(_cfg["timelapse_retention_days"]) * 86400
 
 # When True, index build logs progress at 30-second intervals with camera/date/hour detail.
 VERBOSE_LOGGING: bool = bool(_cfg.get("verbose_logging", False))
+
+# libx264 CRF value for timelapse output (18=lossless-ish, 28=good, 35=small/lower quality).
+OUTPUT_CRF: int = int(_cfg.get("output_crf", 28))
+
+# Maximum output height in pixels; source is scaled down if taller. 0 = no limit.
+OUTPUT_MAX_HEIGHT: int = int(_cfg.get("output_max_height", 1080))

@@ -1,7 +1,7 @@
 ---
 name: "Frigate Timelapse"
 description: "Generate timelapse videos from Frigate NVR recordings with a visual timeline scrubber."
-version: "1.1.4"
+version: "1.2.0"
 slug: "frigate_timelapse"
 url: "https://github.com/paulf/frigate-timelapse"
 arch:
@@ -27,8 +27,12 @@ options:
   port: 8088
   timelapse_retention_days: 7
   verbose_logging: false
+  output_crf: 28
+  output_max_height: 1080
 schema:
   timezone: str
   port: int
   timelapse_retention_days: int
   verbose_logging: bool
+  output_crf: int
+  output_max_height: int
