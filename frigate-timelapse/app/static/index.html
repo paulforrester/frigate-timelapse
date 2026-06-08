@@ -254,6 +254,11 @@
 
     /* Section title within card */
     .section-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+
+    /* Time range inputs */
+    #time-row { display: flex; gap: 14px; margin-top: 10px; align-items: flex-start; flex-wrap: wrap; }
+    .time-err { font-size: 0.72rem; color: #dc2626; min-height: 16px; margin-top: 2px; }
+    input.input-error { border-color: #dc2626 !important; box-shadow: 0 0 0 3px rgba(220,38,38,0.15) !important; }
   </style>
 </head>
 <body>
@@ -281,7 +286,7 @@
 
   <!-- Timeline + previews -->
   <div class="card">
-    <div class="section-label">Timeline — drag handles to set range</div>
+    <div class="section-label">Timeline — drag handles to select · double-click an hour to snap</div>
     <div id="timeline-wrap">
       <div id="timeline">
         <!-- .hour-cell elements inserted here -->
@@ -292,6 +297,19 @@
       </div>
     </div>
     <div id="no-footage" class="hidden">No footage found for this camera and date.</div>
+
+    <div id="time-row" class="hidden">
+      <div class="field">
+        <label>Start time</label>
+        <input type="text" id="time-start" placeholder="HH:MM" maxlength="5" style="min-width:0;width:110px">
+        <div class="time-err" id="err-start"></div>
+      </div>
+      <div class="field">
+        <label>End time</label>
+        <input type="text" id="time-end" placeholder="HH:MM" maxlength="5" style="min-width:0;width:110px">
+        <div class="time-err" id="err-end"></div>
+      </div>
+    </div>
 
     <div class="previews">
       <div class="preview">
@@ -422,6 +440,11 @@
     const hStart       = document.getElementById('handle-start');
     const hEnd         = document.getElementById('handle-end');
     const noFootage    = document.getElementById('no-footage');
+    const timeRow      = document.getElementById('time-row');
+    const timeStart    = document.getElementById('time-start');
+    const timeEnd      = document.getElementById('time-end');
+    const errStart     = document.getElementById('err-start');
+    const errEnd       = document.getElementById('err-end');
     const prevStart    = document.getElementById('preview-start');
     const prevEnd      = document.getElementById('preview-end');
     const lblStart     = document.getElementById('label-start');
@@ -501,6 +524,11 @@
         });
       });
 
+      timeStart.addEventListener('change',  () => applyTimeInput('start'));
+      timeEnd.addEventListener('change',    () => applyTimeInput('end'));
+      timeStart.addEventListener('keydown', e => { if (e.key === 'Enter') applyTimeInput('start'); });
+      timeEnd.addEventListener('keydown',   e => { if (e.key === 'Enter') applyTimeInput('end'); });
+
       initWatermarkUI();
       if (cameras.length) loadTimeline();
     }
@@ -517,6 +545,9 @@
       tl.querySelectorAll('.hour-cell').forEach(el => el.remove());
       selection.style.display = 'none';
       noFootage.classList.add('hidden');
+      timeRow.classList.add('hidden');
+      clearTimeError('start');
+      clearTimeError('end');
       buildBtn.disabled = true;
       prevStart.src = prevEnd.src = '';
       lblStart.textContent = lblEnd.textContent = '—';
@@ -571,6 +602,8 @@
       schedulePreviews();
       autoFilename();
       buildBtn.disabled = false;
+      timeRow.classList.remove('hidden');
+      updateTimeInputs();
     }
 
     // -------------------------------------------------------------------------
@@ -609,6 +642,91 @@
     function tlWidth() { return 24 * CELL_W; }
     function pad(n)    { return String(n).padStart(2, '0'); }
     function enc(s)    { return encodeURIComponent(s); }
+
+    // -------------------------------------------------------------------------
+    // Time input helpers
+    // -------------------------------------------------------------------------
+
+    // Fraction (0–1 of 24 h) → "HH:MM" string in recording timezone.
+    function fracToHHMM(frac) {
+      const secs = Math.round(Math.max(0, Math.min(1, frac)) * 86400);
+      const h    = Math.min(Math.floor(secs / 3600), 23);
+      const m    = Math.floor((secs % 3600) / 60);
+      return `${pad(h)}:${pad(m)}`;
+    }
+
+    // "HH:MM" string → fraction, or null if invalid.
+    function hhmmToFrac(str) {
+      const parts = str.trim().match(/^(\d{1,2}):(\d{2})$/);
+      if (!parts) return null;
+      const h = parseInt(parts[1], 10);
+      const m = parseInt(parts[2], 10);
+      if (h > 23 || m > 59) return null;
+      return (h * 60 + m) / (24 * 60);
+    }
+
+    function setTimeError(field, msg) {
+      const input = field === 'start' ? timeStart : timeEnd;
+      const errEl = field === 'start' ? errStart  : errEnd;
+      input.classList.add('input-error');
+      errEl.textContent = msg;
+    }
+
+    function clearTimeError(field) {
+      const input = field === 'start' ? timeStart : timeEnd;
+      const errEl = field === 'start' ? errStart  : errEnd;
+      if (!input || !errEl) return;
+      input.classList.remove('input-error');
+      errEl.textContent = '';
+    }
+
+    // Push current startFrac/endFrac into the input fields and clear any errors.
+    // Called whenever the handles move (drag, double-click, initial load).
+    function updateTimeInputs() {
+      if (!timeStart) return;
+      timeStart.value = fracToHHMM(startFrac);
+      timeEnd.value   = fracToHHMM(endFrac);
+      clearTimeError('start');
+      clearTimeError('end');
+    }
+
+    // Validate and apply a typed time value; update the corresponding handle.
+    function applyTimeInput(field) {
+      const val  = (field === 'start' ? timeStart : timeEnd).value.trim();
+      const frac = hhmmToFrac(val);
+
+      if (frac === null) {
+        setTimeError(field, 'Enter time as HH:MM');
+        return;
+      }
+
+      const newStart = field === 'start' ? frac : startFrac;
+      const newEnd   = field === 'end'   ? frac : endFrac;
+      const MIN_GAP  = 1 / (24 * 60); // 1-minute minimum range
+
+      if (newStart >= newEnd - MIN_GAP) {
+        setTimeError(field, field === 'start' ? 'Must be before end time' : 'Must be after start time');
+        return;
+      }
+
+      // Footage coverage check — warn but still apply so cross-hour ranges work.
+      const hour = Math.floor(frac * 24);
+      if (timelineHours.length && !timelineHours.includes(hour)) {
+        setTimeError(field, 'No footage in this hour');
+      } else {
+        clearTimeError(field);
+      }
+
+      if (field === 'start') startFrac = frac;
+      else                   endFrac   = frac;
+
+      // Normalize the displayed value after applying
+      (field === 'start' ? timeStart : timeEnd).value = fracToHHMM(frac);
+
+      renderSelection();
+      schedulePreviews();
+      autoFilename();
+    }
 
     // -------------------------------------------------------------------------
     // Selection + handles rendering
@@ -713,11 +831,16 @@
       renderSelection();
       schedulePreviews();
       autoFilename();
+      updateTimeInputs();
     }
 
     // Handle mousedown — captured on the handle divs directly
     hStart.addEventListener('mousedown', e => { dragging = 'start'; e.stopPropagation(); e.preventDefault(); });
     hEnd.addEventListener('mousedown',   e => { dragging = 'end';   e.stopPropagation(); e.preventDefault(); });
+
+    // Prevent a double-click on a handle from triggering the timeline dblclick handler
+    hStart.addEventListener('dblclick', e => e.stopPropagation());
+    hEnd.addEventListener('dblclick',   e => e.stopPropagation());
 
     // Click on timeline body → snap nearest handle to click position
     tl.addEventListener('mousedown', e => {
@@ -726,6 +849,19 @@
       dragging = Math.abs(f - startFrac) <= Math.abs(f - endFrac) ? 'start' : 'end';
       applyDrag(f);
       e.preventDefault();
+    });
+
+    // Double-click → snap both handles to the clicked hour (1-hour selection)
+    tl.addEventListener('dblclick', e => {
+      if (!timelineHours.length) return;
+      e.preventDefault();
+      const hour = Math.floor(xToFrac(e.clientX) * 24);
+      startFrac = hour / 24;
+      endFrac   = Math.min((hour + 1) / 24, 1.0);
+      renderSelection();
+      schedulePreviews();
+      autoFilename();
+      updateTimeInputs();
     });
 
     document.addEventListener('mousemove', e => { if (dragging) applyDrag(xToFrac(e.clientX)); });
