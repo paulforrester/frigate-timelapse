@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -7,8 +8,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app import index
 from app.config import CAMERA_TZ
-from app.recordings import find_segments, list_cameras, segment_at
+from app.recordings import find_segments, segment_at
 from app.render import Status, WatermarkConfig, create_job, extract_thumbnail, get_job
 
 TZ = CAMERA_TZ
@@ -22,6 +24,9 @@ app = FastAPI(title="Frigate Timelapse")
 @app.on_event("startup")
 async def _startup() -> None:
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+    last_scan_time = index.init()
+    asyncio.create_task(index.build(RECORDINGS_PATH, last_scan_time))
+    asyncio.create_task(index.watch(RECORDINGS_PATH))
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +35,12 @@ async def _startup() -> None:
 
 @app.get("/cameras")
 async def cameras() -> list[str]:
-    return list_cameras(RECORDINGS_PATH)
+    return index.get_cameras()
+
+
+@app.get("/status")
+async def status() -> dict:
+    return index.get_status()
 
 
 @app.get("/timezone")
@@ -52,25 +62,14 @@ async def timezone_info(date: str = "") -> dict:
 @app.get("/coverage")
 async def coverage(camera: str, date: str) -> dict[int, list[int]]:
     """
-    Returns {hour: [minute, ...]} for every segment start on *date*.
-    Used by the UI to shade unavailable time slots on the timeline.
+    Returns {hour: [minute, ...]} for every segment start on *date* (in camera local time).
+    Served from the in-memory index — no filesystem walking at request time.
     """
     try:
-        d = datetime.strptime(date, "%Y-%m-%d").date()
+        datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(status_code=422, detail="date must be YYYY-MM-DD")
-
-    day_start = datetime(d.year, d.month, d.day, tzinfo=TZ)
-    day_end   = day_start + timedelta(days=1)
-
-    segments = find_segments(camera, day_start, day_end, RECORDINGS_PATH)
-
-    hours: dict[int, set[int]] = {}
-    for seg in segments:
-        la_start = seg.start.astimezone(TZ)   # convert UTC file time → LA display time
-        hours.setdefault(la_start.hour, set()).add(la_start.minute)
-
-    return {h: sorted(mins) for h, mins in sorted(hours.items())}
+    return index.get_coverage(camera, date, TZ)
 
 
 # ---------------------------------------------------------------------------

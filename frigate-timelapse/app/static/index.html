@@ -228,11 +228,40 @@
 
     .hidden { display: none !important; }
 
+    /* ---- Index loading banner ---- */
+    #index-banner {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      padding: 10px 16px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    #index-msg { font-size: 0.82rem; color: #1e40af; white-space: nowrap; }
+    #index-bar {
+      flex: 1;
+      height: 5px;
+      border-radius: 3px;
+      appearance: none;
+      background: #dbeafe;
+      display: block;
+    }
+    #index-bar::-webkit-progress-bar   { background: #dbeafe; border-radius: 3px; }
+    #index-bar::-webkit-progress-value { background: #3b82f6; border-radius: 3px; }
+    #index-bar::-moz-progress-bar      { background: #3b82f6; border-radius: 3px; }
+
     /* Section title within card */
     .section-label { font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
   </style>
 </head>
 <body>
+
+  <div id="index-banner" class="hidden">
+    <span id="index-msg">Building recording index…</span>
+    <progress id="index-bar" value="0" max="100"></progress>
+  </div>
 
   <h1>Frigate Timelapse</h1>
 
@@ -396,9 +425,38 @@
     const downloadBtn  = document.getElementById('download-btn');
 
     // -------------------------------------------------------------------------
+    // Index readiness — poll /status until indexed=true
+    // -------------------------------------------------------------------------
+    async function waitForIndex() {
+      let s;
+      try { s = await apiFetch('/status'); } catch { return; }
+      if (s.indexed) return;
+
+      const banner = document.getElementById('index-banner');
+      const bar    = document.getElementById('index-bar');
+      const msg    = document.getElementById('index-msg');
+      banner.classList.remove('hidden');
+
+      await new Promise(resolve => {
+        const poll = setInterval(async () => {
+          let st;
+          try { st = await apiFetch('/status'); } catch { return; }
+          bar.value = st.progress;
+          msg.textContent = `Building recording index… ${st.progress}%`;
+          if (st.indexed) {
+            clearInterval(poll);
+            banner.classList.add('hidden');
+            resolve();
+          }
+        }, 500);
+      });
+    }
+
+    // -------------------------------------------------------------------------
     // Bootstrap
     // -------------------------------------------------------------------------
     async function init() {
+      await waitForIndex();
       // Fetch timezone offset first (use UTC date as seed — DST edge-case is negligible).
       // Never use browser local time; always work in America/Los_Angeles.
       const tzData = await apiFetch(`/timezone?date=${new Date().toISOString().slice(0, 10)}`);
