@@ -74,8 +74,9 @@ cameras = sorted(os.listdir(f"{RECORDINGS_PATH}/{latest_date}/{first_hour}"))
    given camera and time range to find which segment files exist
 3. **Extract thumbnail frames** — use ffmpeg to pull a single JPEG from a segment
    file at a given offset; used for the timeline scrubber and start/end preview
-4. **Render timelapse** — concatenate the relevant segments with ffmpeg and apply a
-   speed-up filter (`setpts`, `atempo` or just drop audio); save to output directory
+4. **Render timelapse** — split segments into parallel chunks (one per CPU core),
+   encode each concurrently with ffmpeg (`setpts` + scale + optional watermark),
+   then stream-copy join the chunks; see *ffmpeg pipeline* below
 5. **Serve download** — stream the finished MP4 to the browser
 
 No Frigate API calls needed for any of these steps.
@@ -90,10 +91,12 @@ Key routes:
 
 | Route | Purpose |
 |-------|---------|
-| `GET /cameras` | List subdirs of `RECORDINGS_PATH` |
-| `GET /coverage?camera=X&date=YYYY-MM-DD` | Return hour/minute slots that have footage for the given camera+date; used to grey out unavailable times in the UI |
+| `GET /cameras` | List cameras (from startup coverage index) |
+| `GET /status` | Index build progress: `{indexed, progress}` — UI polls until `indexed=true` |
+| `GET /timezone?date=YYYY-MM-DD` | Camera-timezone UTC offset in seconds for that date (handles DST) |
+| `GET /coverage?camera=X&date=YYYY-MM-DD` | Return `{hour: [minute,...]}` for available footage; served from in-memory index |
 | `GET /thumbnail?camera=X&ts=<unix>` | Extract a JPEG frame from the segment containing `ts`; returns image/jpeg |
-| `POST /timelapse` | Start render job; body: `{camera, start_ts, end_ts, speed, name}`; returns `{job_id}` |
+| `POST /timelapse` | Start render job; body: `{camera, start_ts, end_ts, speed, name, watermark, encode_preset}`; returns `{job_id}` |
 | `GET /timelapse/{job_id}` | Poll job status: `{status, progress, output_file}` |
 | `GET /timelapse/{job_id}/download` | Stream finished MP4 to browser |
 
@@ -101,25 +104,39 @@ Key routes:
 
 **Thumbnail extraction** (single frame from a segment file):
 ```bash
-ffmpeg -ss {offset} -i {segment.mp4} -frames:v 1 -q:v 2 {out.jpg}
+ffmpeg -ss {offset} -i {segment.mp4} -frames:v 1 -q:v 2 -f image2 pipe:1
 ```
 
-**Timelapse render** (concatenate segments then speed up):
+**Timelapse render** — parallel chunk encoding + stream-copy join:
+
+`n_chunks = min(CPU_COUNT, n_segments ÷ 4)`. Falls back to a single ffmpeg process
+when fewer than 4 segments per core. Each chunk gets `CPU_COUNT ÷ n_chunks` threads.
+
 ```bash
-# Step 1: write a concat list
-echo "file '/recordings/camera/...mp4'" > /tmp/concat.txt
-...
+# Step 1: write one concat list per chunk (temp files, deleted after render)
+echo "file '...mp4'" > /tmp/frigate_chunk_XXXX.txt
 
-# Step 2: concatenate + speed up in one pass
-ffmpeg -f concat -safe 0 -i /tmp/concat.txt \
-  -vf "setpts={1/speed}*PTS" \
+# Step 2: run N ffmpeg processes in parallel (one per chunk)
+ffmpeg -y -f concat -safe 0 -i chunk_N.txt \
+  -vf "scale=-2:if(gt(ih\,1080)\,1080\,ih),setpts=0.00333*PTS" \
   -an \
-  -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p \
-  {output.mp4}
+  -c:v libx264 -preset fast -crf 28 -threads {CPU÷N} \
+  -pix_fmt yuv420p -progress pipe:2 \
+  {output_dir}/_chunk_{job_id}_{N}.mp4
+
+# Step 3: stream-copy join — no re-encode, lossless concat
+ffmpeg -y -f concat -safe 0 -i join.txt -c:v copy {output.mp4}
 ```
 
-Speed is a user-controlled multiplier (e.g. 10× = `setpts=0.1*PTS`). Default: 10×.
-Drop audio (`-an`) — timelapse audio is meaningless.
+CRF and max output height are configurable (`OUTPUT_CRF`, `OUTPUT_MAX_HEIGHT`).
+The encode preset is chosen per-render in the UI (Quality/Balanced/Speed maps to
+ffmpeg `medium`/`fast`/`ultrafast`). Speed multiplier is user-controlled (e.g.
+10× = `setpts=0.1*PTS`). Audio is always dropped (`-an`).
+
+**Scale filter `\,` escaping**: within an ffmpeg filtergraph, commas separate
+filters. Inside an option value, commas must be escaped as `\,`. In Python source,
+write `\\,` so the runtime string contains `\,`, which ffmpeg parses as a literal
+comma inside the expression (e.g. `if(gt(ih\\,1080)\\,1080\\,ih)`).
 
 ### Segment file → timestamp mapping
 
@@ -148,15 +165,19 @@ Each segment is approximately 10–60 seconds. Use this to:
 - Vanilla JS + CSS; no build step, no npm
 - Served by FastAPI as a static file
 - UI flow:
-  1. Camera dropdown (from `/cameras`)
-  2. Date picker — grey out dates with no footage
-  3. Timeline strip: a row of thumbnail images across the selected day, one per
-     available hour-block; clicking/dragging sets start and end handles
+  1. Camera dropdown (from `/cameras` index)
+  2. Date picker — defaults to today in recording timezone; updates on camera change
+  3. Timeline strip: thumbnails for each hour; drag handles to set start/end; double-
+     click an hour to snap both handles to a 1-hour selection; two HH:MM text inputs
+     below the strip stay in sync with the handles and accept direct edits (validates
+     format + start < end; warns if the entered hour has no footage but still applies)
   4. Start/end preview frames update as handles move
-  5. Speed multiplier selector (5×, 10×, 25×, 60×, 120×, 300×, 600×, 900×, 1200×)
-  6. Output filename (auto-generated, editable)
-  7. "Build Timelapse" → progress bar polling `/timelapse/{job_id}`
-  8. On completion: "Download" button
+  5. Speed multiplier (5×–1200×)
+  6. Encode quality: Quality / Balanced / Speed → ffmpeg `medium` / `fast` / `ultrafast`
+  7. Watermark toggle — camera name + recording-timezone timestamp burned in
+  8. Output filename (auto-generated, editable)
+  9. "Build Timelapse" → progress bar polling `/timelapse/{job_id}`
+  10. On completion: "Download" button
 
 ### HA add-on structure
 
@@ -172,6 +193,7 @@ frigate-timelapse/          # add-on subfolder
 └── app/
     ├── main.py             # FastAPI app + all routes
     ├── config.py           # config loading (HA options → config.json → defaults)
+    ├── index.py            # startup coverage index: in-memory + background build/watch + persistence
     ├── recordings.py       # filesystem walking, segment→timestamp mapping
     ├── render.py           # ffmpeg job queue + timelapse/thumbnail logic
     └── static/
@@ -237,8 +259,13 @@ in the HA add-on store. HA builds the image locally — no registry push needed.
 - **ffmpeg concat with many files** — write a concat list file rather than passing
   all paths as arguments; avoids shell argument length limits
 - **Output directory must exist** before ffmpeg writes to it — create on startup
-- **Job cleanup** — keep finished job metadata in memory (dict); optionally delete
-  temp concat list files after render completes
+- **Job cleanup** — finished job metadata is kept in an in-memory dict; temp concat
+  list files and chunk MP4s are deleted in the `finally` block of `_render_sync`
+- **Coverage index** — built at startup by walking the entire recordings tree; persisted
+  to `/data/coverage_index.json` so restarts are instant; updated live via `watchfiles`
+  watching `RECORDINGS_PATH`. The in-memory structure is
+  `{camera: {utc_date_str: {utc_hour: set[minute]}}}`. The `/status` endpoint reports
+  build progress so the UI can show a loading indicator while the initial scan runs.
 - **HA OS host shell has no python3** — all deploy scripting runs locally
 - **All HA add-ons share the `hassio` Docker network** — Frigate reachable at
   `http://<frigate-slug>:5000` without extra network config in config.yaml

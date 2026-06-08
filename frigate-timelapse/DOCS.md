@@ -5,10 +5,26 @@ No Frigate API authentication required.
 
 ## How it works
 
-The add-on reads the segment files Frigate writes to `/media/frigate/recordings/`
-and uses ffmpeg to concatenate and speed them up.  Finished timelapses are saved
-to `/media/frigate/timelapses/`, which appears automatically in HA's Media Browser
-alongside Frigate's own clips and exports.
+The add-on indexes the segment files Frigate writes to `/media/frigate/recordings/`
+at startup and keeps the index in memory.  The UI loads immediately from the cached
+index; new recordings are picked up live as Frigate writes them.
+
+When you build a timelapse the add-on splits the segment list across CPU cores,
+encodes each chunk in parallel with ffmpeg, then joins them into a single MP4.
+Finished timelapses are saved to `/media/frigate/timelapses/`, which appears
+automatically in HA's Media Browser alongside Frigate's own clips and exports.
+
+## Building a timelapse
+
+1. Select a camera and date — the timeline loads thumbnails for every available hour
+2. Drag the handles to set your start/end range, **double-click an hour** to snap to
+   a 1-hour selection, or type directly in the **Start / End time** fields
+3. Choose a speed multiplier (10× is a good starting point; 300× for a full day)
+4. Choose an encode quality — **Balanced** is the default; **Quality** gives a smaller
+   file at the cost of slower encoding; **Speed** is fastest but produces larger files
+5. Optionally enable the **Watermark** (camera name + recording-timezone timestamp)
+6. Click **Build Timelapse** and watch the progress bar
+7. Download the finished file or find it in the HA Media Browser under `timelapses/`
 
 ## Configuration options
 
@@ -26,16 +42,9 @@ alongside Frigate's own clips and exports.
 - **Sidebar (ingress):** click *Timelapse* in the HA sidebar after enabling the add-on
 - **Direct:** `http://<ha-host>:8088`
 
-## Frigate network access
-
-All HA add-ons share the internal `hassio` Docker network.  The Frigate add-on is
-reachable inside the container at `http://ccab4aaf-frigate-fa:5000` without any
-additional network configuration.  This add-on currently uses direct file access
-only; the Frigate API client (`app/frigate.py`) is wired up for future use.
-
 ## Media paths (fixed)
 
-| Path in container | HA host path |
-|-------------------|--------------|
-| `/media/frigate/recordings` | `/media/frigate/recordings` (read) |
-| `/media/frigate/timelapses` | `/media/frigate/timelapses` (write) |
+| Path in container | Purpose |
+|-------------------|---------|
+| `/media/frigate/recordings` | Source recordings (read) |
+| `/media/frigate/timelapses` | Output timelapses (write) |
