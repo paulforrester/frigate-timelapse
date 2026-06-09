@@ -241,8 +241,11 @@ RECORDINGS_PATH=./test-data/recordings OUTPUT_PATH=./test-data/output \
 
 ### Installing on HA
 
-Push the repo to GitHub (must be public), then add the repo URL as a custom repository
-in the HA add-on store. HA builds the image locally — no registry push needed.
+Push the repo to GitHub (must be public). Users add it via:
+- The My HA badge link (see README) — one click, opens the repository dialog pre-filled
+- Manual: **Settings → Add-ons → Add-on Store** (bottom-right button) **→ ⋮ → Repositories**
+
+HA builds the image locally from the Dockerfile — no registry push needed.
 
 ---
 

@@ -30,12 +30,21 @@ Frigate has already written to `/media/frigate/recordings/`.
 
 ## Installation
 
-This is a custom add-on repository. To install:
+This is a custom add-on repository.
 
-1. In HA, go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
-2. Add this repo's URL: `https://github.com/paulforrester/frigate-timelapse`
-3. Find **Frigate Timelapse** in the store and install it
-4. Configure options (see below) and start the add-on
+**Easy install — click to add the repository directly to your HA instance:**
+
+[![Add repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fpaulforrester%2Ffrigate-timelapse)
+
+**Manual install:**
+
+1. In HA, go to **Settings → Add-ons**
+2. Click **Add-on Store** (bottom-right button)
+3. Click the three-dot menu (**⋮**) in the top-right corner and select **Repositories**
+4. Paste `https://github.com/paulforrester/frigate-timelapse` and click **Add**
+5. Close the dialog — the repository now appears in the store
+6. Find **Frigate Timelapse**, click it, and click **Install**
+7. Configure options (see below) and click **Start**
 
 ---
 
