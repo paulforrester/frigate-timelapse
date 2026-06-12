@@ -2,10 +2,12 @@
 
 ## Project goal
 
-Build a self-hosted Home Assistant add-on that generates timelapse videos from Frigate NVR
-recordings. The app works **directly with Frigate's recording files on disk** (no Frigate
-API auth required), uses ffmpeg to concatenate and speed-up MP4 segments, and serves a
-browser UI with a visual timeline scrubber for selecting camera / time range.
+Build a self-hosted app that generates timelapse videos from Frigate NVR recordings.
+Ships as both a **Home Assistant add-on** and a **standalone Docker container** (image
+published to `ghcr.io/paulforrester/frigate-timelapse`). The app works **directly with
+Frigate's recording files on disk** (no Frigate API auth required), uses ffmpeg to
+concatenate and speed-up MP4 segments, and serves a browser UI with a visual timeline
+scrubber for selecting camera / time range.
 
 **No credentials are stored anywhere in this app.** All access is via bind-mounted
 filesystem paths — the app reads files Frigate has already written.
@@ -179,14 +181,18 @@ Each segment is approximately 10–60 seconds. Use this to:
   9. "Build Timelapse" → progress bar polling `/timelapse/{job_id}`
   10. On completion: "Download" button
 
-### HA add-on structure
+### Repo structure
 
 ```
-frigate-timelapse/          # add-on subfolder
+.github/workflows/
+└── docker-publish.yml      # builds + pushes ghcr.io image on main push and version tags
+docker-compose.yml          # standalone Docker deployment (repo root)
+repository.json             # HA custom repository descriptor (repo root)
+frigate-timelapse/          # HA add-on subfolder (also the Docker build context)
 ├── config.yaml             # add-on metadata and options schema
 ├── build.yaml              # multi-arch build targets
-├── Dockerfile              # image build instructions
-├── run.sh                  # container entrypoint
+├── Dockerfile              # image build instructions (shared by HA and standalone Docker)
+├── run.sh                  # container entrypoint — reads OUTPUT_PATH env var
 ├── config.json             # local dev defaults (mirrors config.yaml options)
 ├── requirements.txt
 ├── DOCS.md                 # user-facing documentation
@@ -198,16 +204,17 @@ frigate-timelapse/          # add-on subfolder
     ├── render.py           # ffmpeg job queue + timelapse/thumbnail logic
     └── static/
         └── index.html      # entire UI in one file
-repository.json             # repo root — required for HA custom repository
 ```
 
 ---
 
 ## Output
 
-- Timelapses saved to `/media/frigate/timelapses/{name}.mp4`
-- `/media/frigate/` is exposed in HA's Media Browser — the `timelapses/` subdir
-  appears there automatically alongside `clips/`, `exports/`, etc.
+- Timelapses saved to `{OUTPUT_PATH}/{name}.mp4`
+  - **HA add-on default:** `OUTPUT_PATH=/media/frigate/timelapses` — appears in HA
+    Media Browser automatically alongside `clips/`, `exports/`, etc.
+  - **Standalone Docker:** set `OUTPUT_PATH` via env var (compose default: `/output`,
+    bind-mounted to wherever the user wants files on the host)
 - Also directly downloadable from the app UI
 - Files are automatically deleted after `timelapse_retention_days` (default: 7 days)
 
@@ -245,7 +252,16 @@ Push the repo to GitHub (must be public). Users add it via:
 - The My HA badge link (see README) — one click, opens the repository dialog pre-filled
 - Manual: **Settings → Add-ons → Add-on Store** (bottom-right button) **→ ⋮ → Repositories**
 
-HA builds the image locally from the Dockerfile — no registry push needed.
+HA builds the image locally from the Dockerfile — it does not pull from ghcr.io.
+
+### Standalone Docker
+
+Image is published automatically to `ghcr.io/paulforrester/frigate-timelapse` by the
+GitHub Actions workflow on every push to `main` (`:latest`) and on version tags
+(`:1.3.2`, `:1.3`, etc.). Users deploy via `docker-compose.yml` at the repo root — see
+README for the full steps.
+
+To publish a new release: `git tag v1.x.y && git push origin v1.x.y`.
 
 ---
 
