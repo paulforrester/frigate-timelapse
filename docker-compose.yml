@@ -1,0 +1,19 @@
+services:
+  frigate-timelapse:
+    image: ghcr.io/paulforrester/frigate-timelapse:latest
+    container_name: frigate-timelapse
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    volumes:
+      - /path/to/frigate/media/recordings:/recordings:ro
+      - /path/to/frigate/media/timelapses:/output:rw
+      - timelapse_data:/data
+    environment:
+      - TZ=America/Los_Angeles
+      - RECORDINGS_PATH=/recordings
+      - OUTPUT_PATH=/output
+      - PORT=8088
+
+volumes:
+  timelapse_data:

@@ -48,6 +48,61 @@ This is a custom add-on repository.
 
 ---
 
+## Standalone Docker Deployment
+
+Run Frigate Timelapse as a plain Docker container — no Home Assistant required. Frigate
+can be running anywhere (bare Docker, another host, etc.) as long as you can mount its
+recordings directory.
+
+### Prerequisites
+
+- Docker and Docker Compose installed on the host
+- Frigate NVR running with recordings enabled and accessible from this host
+
+### Find your Frigate recordings path
+
+| Setup | Typical path |
+|-------|-------------|
+| Home Assistant OS | `/media/frigate/recordings` |
+| Some HA configurations | `/config/media/frigate/recordings` |
+| Bare Docker (Frigate) | Wherever you mapped Frigate's `/media/frigate/recordings` volume |
+
+### Steps
+
+1. **Get the compose file** — either clone the repo or download just the file:
+   ```bash
+   curl -O https://raw.githubusercontent.com/paulforrester/frigate-timelapse/main/docker-compose.yml
+   ```
+
+2. **Create the output directory** (if it doesn't exist yet):
+   ```bash
+   mkdir -p /path/to/frigate/media/timelapses
+   ```
+
+3. **Edit `docker-compose.yml`** — update the two volume paths and the timezone:
+   ```yaml
+   volumes:
+     - /actual/path/to/frigate/recordings:/recordings:ro   # ← your recordings path
+     - /actual/path/to/frigate/timelapses:/output:rw       # ← where timelapses are saved
+   environment:
+     - TZ=America/Los_Angeles   # ← your camera timezone (IANA name)
+   ```
+
+4. **Start the container:**
+   ```bash
+   docker compose up -d
+   ```
+
+5. **Open the UI** at `http://<host-ip>:8088`
+
+### Updating
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+---
+
 ## Configuration
 
 | Option | Default | Description |
